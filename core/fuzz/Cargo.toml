@@ -1,0 +1,25 @@
+[package]
+name = "warpstate-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+repository = "https://github.com/santhsecurity/Santh"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+warpstate = { path = ".." }
+
+[[bin]]
+name = "fuzz_dfa_compile"
+path = "fuzz_targets/fuzz_dfa_compile.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_scan"
+path = "fuzz_targets/fuzz_scan.rs"
+test = false
+doc = false

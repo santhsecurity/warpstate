@@ -1,0 +1,413 @@
+use aho_corasick::AhoCorasick;
+
+use super::{check_input_size, sort_matches_if_needed, MAX_CPU_INPUT_BYTES, MAX_CPU_MATCHES};
+use crate::error::{Error, Result};
+use crate::hash_scan::HashScanner;
+use crate::pattern::PatternIR;
+use crate::Match;
+
+/// Non-overlapping scan — SIMD-accelerated Teddy prefilters enabled.
+///
+/// Uses `find_iter` which enables Aho-Corasick's vectorized Teddy prefilter
+/// (128-bit or 256-bit SIMD). First match per position wins. This is the
+/// default for CLI output and matches ripgrep's semantics.
+///
+/// # Errors
+///
+/// Returns [`Error::InputTooLarge`] if `data.len()` exceeds 4 GiB.
+#[inline]
+pub fn scan(ir: &PatternIR, data: &[u8], out_matches: &mut [Match]) -> Result<usize> {
+    check_input_size(data)?;
+
+    let mut count = 0;
+    scan_with(ir, data, &mut |matched| {
+        if count < out_matches.len() {
+            out_matches[count] = matched;
+            count += 1;
+            true
+        } else {
+            false
+        }
+    })?;
+    sort_matches_if_needed(&mut out_matches[..count]);
+    if count == out_matches.len() {
+        return Err(Error::MatchBufferOverflow {
+            count,
+            max: out_matches.len().min(MAX_CPU_MATCHES),
+        });
+    }
+    Ok(count)
+}
+
+/// Non-overlapping scan that streams matches into `visitor`.
+///
+/// The callback receives matches in backend emission order. Return `false` to
+/// stop scanning early.
+#[inline]
+pub fn scan_with<F>(ir: &PatternIR, data: &[u8], visitor: &mut F) -> Result<()>
+where
+    F: FnMut(Match) -> bool,
+{
+    check_input_size(data)?;
+
+    if ir.offsets.len() == 1 && ir.regex_dfas.is_empty() && !ir.case_insensitive {
+        let (start, len) = ir.offsets[0];
+        let needle = &ir.packed_bytes[start as usize..(start + len) as usize];
+        return scan_single_literal_with(ir, data, needle, visitor);
+    }
+    // Fast path for case-insensitive single literals: use regex crate's SIMD
+    // engine via (?i:pattern) instead of the slower Aho-Corasick CI automaton.
+    // NOTE: regex is compiled per-call here. For daemon/streaming use,
+    // prefer CachedScanner which compiles once and reuses across files.
+    if ir.offsets.len() == 1 && ir.regex_dfas.is_empty() && ir.case_insensitive {
+        if let Some(re) = &ir.fast_ci_regex {
+            for m in re.find_iter(data) {
+                let s = u32::try_from(m.start()).map_err(|_| Error::InputTooLarge {
+                    bytes: m.start(),
+                    max_bytes: MAX_CPU_INPUT_BYTES,
+                })?;
+                let e = u32::try_from(m.end()).map_err(|_| Error::InputTooLarge {
+                    bytes: m.end(),
+                    max_bytes: MAX_CPU_INPUT_BYTES,
+                })?;
+                if !visitor(Match {
+                    pattern_id: 0,
+                    start: s,
+                    end: e,
+                    padding: 0,
+                }) {
+                    return Ok(());
+                }
+            }
+            return Ok(());
+        }
+    }
+    if let Some(scanner) = &ir.cached_hash_scanner {
+        scan_literals_fast_with_hash(scanner, data, visitor)?;
+    } else if super::should_use_hash_scanner(ir) {
+        let scanner = HashScanner::build(ir);
+        scan_literals_fast_with_hash(&scanner, data, visitor)?;
+    } else {
+        scan_literals_fast_with(ir, data, visitor)?;
+    }
+
+    // Always scan regex DFAs — they are independent of the literal scanner.
+    for dfa in &ir.regex_dfas {
+        dfa.scan_native_with(data, visitor)?;
+    }
+    Ok(())
+}
+
+/// Count non-overlapping matches without allocating a `Vec<Match>`.
+#[inline]
+pub fn scan_count(ir: &PatternIR, data: &[u8]) -> Result<usize> {
+    let mut count = 0usize;
+    scan_with(ir, data, &mut |_| {
+        count += 1;
+        true
+    })?;
+    Ok(count)
+}
+
+/// Single-literal scan using memchr::memmem — fastest possible path.
+#[inline]
+pub(crate) fn scan_single_literal_with_finder(
+    data: &[u8],
+    finder: &memchr::memmem::Finder<'_>,
+    pattern_id: u32,
+    needle_len: u32,
+    out_matches: &mut [Match],
+) -> Result<usize> {
+    let mut count = 0;
+    for pos in finder.find_iter(data) {
+        if count >= out_matches.len() {
+            return Err(Error::MatchBufferOverflow {
+                count,
+                max: out_matches.len().min(MAX_CPU_MATCHES),
+            });
+        }
+        // SAFETY: pos < data.len() which is validated <= u32::MAX by check_input_size
+        #[allow(clippy::cast_possible_truncation)]
+        let start = pos as u32;
+        // SAFETY: pos < data.len() which is validated <= u32::MAX by check_input_size
+        #[allow(clippy::cast_possible_truncation)]
+        let end = (pos as u32).saturating_add(needle_len);
+        out_matches[count] = Match {
+            pattern_id,
+            start,
+            end,
+            padding: 0,
+        };
+        count += 1;
+    }
+    Ok(count)
+}
+
+#[inline]
+fn scan_single_literal_with<F>(
+    ir: &PatternIR,
+    data: &[u8],
+    needle: &[u8],
+    visitor: &mut F,
+) -> Result<()>
+where
+    F: FnMut(Match) -> bool,
+{
+    let finder = memchr::memmem::Finder::new(needle);
+    // pattern_id comes from automaton ID which is bounded by pattern count
+    #[allow(clippy::cast_possible_truncation)]
+    let pattern_id = ir.literal_automaton_ids.first().copied().unwrap_or(0) as u32;
+    // needle_len is bounded by the literal length which is reasonable
+    #[allow(clippy::cast_possible_truncation)]
+    let needle_len = needle.len() as u32;
+    for (count, pos) in finder.find_iter(data).enumerate() {
+        if count >= MAX_CPU_MATCHES {
+            return Err(Error::MatchBufferOverflow {
+                count: MAX_CPU_MATCHES,
+                max: MAX_CPU_MATCHES,
+            });
+        }
+        // SAFETY: pos < data.len() which is validated <= u32::MAX by check_input_size
+        #[allow(clippy::cast_possible_truncation)]
+        let start = pos as u32;
+        // SAFETY: pos < data.len() which is validated <= u32::MAX by check_input_size
+        #[allow(clippy::cast_possible_truncation)]
+        let end = (pos as u32).saturating_add(needle_len);
+        if !visitor(Match {
+            pattern_id,
+            start,
+            end,
+            padding: 0,
+        }) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+#[inline]
+pub(crate) fn scan_literals_fast_with_hash<F>(
+    scanner: &HashScanner,
+    data: &[u8],
+    visitor: &mut F,
+) -> Result<()>
+where
+    F: FnMut(Match) -> bool,
+{
+    for (count, mat) in scanner.scan(data).into_iter().enumerate() {
+        if count >= MAX_CPU_MATCHES {
+            return Err(Error::MatchBufferOverflow {
+                count: MAX_CPU_MATCHES,
+                max: MAX_CPU_MATCHES,
+            });
+        }
+        if !visitor(mat) {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+/// Overlapping scan — reports every match at every byte position.
+///
+/// Uses `find_overlapping_iter` which disables Teddy SIMD prefilters but
+/// guarantees every overlapping match is reported. Required for GPU backend
+/// parity (GPU threads inspect every byte independently).
+///
+/// # Errors
+///
+/// Returns [`Error::InputTooLarge`] if `data.len()` exceeds 4 GiB.
+#[inline]
+pub fn scan_overlapping(ir: &PatternIR, data: &[u8], out_matches: &mut [Match]) -> Result<usize> {
+    check_input_size(data)?;
+    let mut count = scan_literals_overlapping(ir, data, out_matches)?;
+    for dfa in &ir.regex_dfas {
+        // Overlapping mode also uses native scan for correctness.
+        // True overlapping regex is not yet supported — this uses
+        // non-overlapping native search as a baseline.
+        let added = dfa.scan_native(data, &mut out_matches[count..])?;
+        count += added;
+    }
+    sort_matches_if_needed(&mut out_matches[..count]);
+    Ok(count)
+}
+
+#[inline]
+pub(crate) fn scan_literals_fast_with<F>(ir: &PatternIR, data: &[u8], visitor: &mut F) -> Result<()>
+where
+    F: FnMut(Match) -> bool,
+{
+    let Some(ac) = &ir.literal_automaton else {
+        return Ok(());
+    };
+
+    for (count, mat) in ac.find_iter(data).enumerate() {
+        if count >= MAX_CPU_MATCHES {
+            return Err(Error::MatchBufferOverflow {
+                count: MAX_CPU_MATCHES,
+                max: MAX_CPU_MATCHES,
+            });
+        }
+        // SAFETY: mat.pattern() index is valid by AhoCorasick contract
+        #[allow(clippy::cast_possible_truncation)]
+        let pattern_id = ir.literal_automaton_ids[mat.pattern().as_usize()] as u32;
+        // SAFETY: mat.start() < data.len() which is validated <= u32::MAX by check_input_size
+        #[allow(clippy::cast_possible_truncation)]
+        let start = mat.start() as u32;
+        // SAFETY: mat.end() <= data.len() which is validated <= u32::MAX by check_input_size
+        #[allow(clippy::cast_possible_truncation)]
+        let end = mat.end() as u32;
+        if !visitor(Match {
+            pattern_id,
+            start,
+            end,
+            padding: 0,
+        }) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Overlapping literal scan — visits every byte position.
+///
+/// Rebuilds the Aho-Corasick automaton with `MatchKind::Standard` because
+/// the primary automaton uses `LeftmostFirst` (for Teddy SIMD prefilters)
+/// which does not support `find_overlapping_iter`.
+#[inline]
+fn scan_literals_overlapping(
+    ir: &PatternIR,
+    data: &[u8],
+    out_matches: &mut [Match],
+) -> Result<usize> {
+    if ir.literal_automaton.is_none() {
+        return Ok(0);
+    }
+
+    // Extract the same literal patterns used by the primary automaton.
+    // ir.literal_automaton_ids maps automaton-internal pattern indices to
+    // original pattern IDs. We rebuild from the same patterns so the
+    // index mapping stays valid.
+    let mut literal_patterns: Vec<&[u8]> = Vec::with_capacity(ir.literal_automaton_ids.len());
+    for &original_id in &ir.literal_automaton_ids {
+        if original_id < ir.offsets.len() {
+            let (start, len) = ir.offsets[original_id];
+            let s = start as usize;
+            let e = s + len as usize;
+            if e <= ir.packed_bytes.len() {
+                literal_patterns.push(&ir.packed_bytes[s..e]);
+            }
+        }
+    }
+    if literal_patterns.is_empty() {
+        return Ok(0);
+    }
+
+    let ac = aho_corasick::AhoCorasick::builder()
+        .match_kind(aho_corasick::MatchKind::Standard)
+        .ascii_case_insensitive(ir.case_insensitive)
+        .build(&literal_patterns)
+        .map_err(|error| Error::PatternCompilationFailed {
+            reason: error.to_string(),
+        })?;
+
+    let mut count = 0;
+    for mat in ac.find_overlapping_iter(data) {
+        if count >= out_matches.len() {
+            return Err(Error::MatchBufferOverflow {
+                count,
+                max: out_matches.len().min(MAX_CPU_MATCHES),
+            });
+        }
+        // SAFETY: mat.pattern() index is valid by AhoCorasick contract
+        #[allow(clippy::cast_possible_truncation)]
+        let pattern_id = ir.literal_automaton_ids[mat.pattern().as_usize()] as u32;
+        // SAFETY: mat.start() < data.len() which is validated <= u32::MAX by check_input_size
+        #[allow(clippy::cast_possible_truncation)]
+        let start = mat.start() as u32;
+        // SAFETY: mat.end() <= data.len() which is validated <= u32::MAX by check_input_size
+        #[allow(clippy::cast_possible_truncation)]
+        let end = mat.end() as u32;
+        out_matches[count] = Match {
+            pattern_id,
+            start,
+            end,
+            padding: 0,
+        };
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Directly scan an arbitrary payload using the provided AhoCorasick automaton.
+///
+/// Uses non-overlapping mode for SIMD acceleration.
+#[inline]
+pub fn scan_aho_corasick(
+    aho: &AhoCorasick,
+    data: &[u8],
+    out_matches: &mut [Match],
+) -> Result<usize> {
+    let mut count = 0;
+    for mat in aho.find_iter(data) {
+        if count >= out_matches.len() {
+            return Err(Error::MatchBufferOverflow {
+                count,
+                max: out_matches.len().min(MAX_CPU_MATCHES),
+            });
+        }
+        // SAFETY: pattern index is valid by AhoCorasick contract
+        #[allow(clippy::cast_possible_truncation)]
+        let pattern_id = mat.pattern().as_usize() as u32;
+        // SAFETY: mat.start() < data.len() which is validated <= u32::MAX by check_input_size
+        #[allow(clippy::cast_possible_truncation)]
+        let start = mat.start() as u32;
+        // SAFETY: mat.end() <= data.len() which is validated <= u32::MAX by check_input_size
+        #[allow(clippy::cast_possible_truncation)]
+        let end = mat.end() as u32;
+        out_matches[count] = Match {
+            pattern_id,
+            start,
+            end,
+            padding: 0,
+        };
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Directly scan with overlapping semantics using the provided AhoCorasick automaton.
+#[inline]
+pub fn scan_aho_corasick_overlapping(
+    aho: &AhoCorasick,
+    data: &[u8],
+    out_matches: &mut [Match],
+) -> Result<usize> {
+    let mut count = 0;
+    for mat in aho.find_overlapping_iter(data) {
+        if count >= out_matches.len() {
+            return Err(Error::MatchBufferOverflow {
+                count,
+                max: out_matches.len().min(MAX_CPU_MATCHES),
+            });
+        }
+        // SAFETY: pattern index is valid by AhoCorasick contract
+        #[allow(clippy::cast_possible_truncation)]
+        let pattern_id = mat.pattern().as_usize() as u32;
+        // SAFETY: mat.start() < data.len() which is validated <= u32::MAX by check_input_size
+        #[allow(clippy::cast_possible_truncation)]
+        let start = mat.start() as u32;
+        // SAFETY: mat.end() <= data.len() which is validated <= u32::MAX by check_input_size
+        #[allow(clippy::cast_possible_truncation)]
+        let end = mat.end() as u32;
+        out_matches[count] = Match {
+            pattern_id,
+            start,
+            end,
+            padding: 0,
+        };
+        count += 1;
+    }
+    Ok(count)
+}

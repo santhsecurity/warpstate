@@ -1,0 +1,104 @@
+[package]
+name = "warpstate"
+description = "GPU-accelerated multi-pattern matching — run thousands of literals on GPU via wgpu compute shaders"
+readme = "README.md"
+keywords = ["gpu", "pattern-matching", "aho-corasick", "wgpu", "dfa"]
+categories = ["algorithms", "text-processing", "concurrency"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository = "https://github.com/santhsecurity/Santh"
+authors.workspace = true
+homepage = "https://github.com/santhsecurity/warpstate"
+documentation = "https://docs.rs/warpstate"
+
+
+[dependencies]
+arc-swap = "1"
+bufpool = { version = "0.1",  path = "../../../memory/bufpool", optional = true  }
+matchkit.workspace = true
+wgpu = { workspace = true, optional = true }
+aho-corasick.workspace = true
+dfajit = { version = "0.1",  path = "../../../matching/dfajit", optional = true  }
+memchr.workspace = true
+regex-automata.workspace = true
+bytemuck.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+libc = "0.2"
+parking_lot = "0.12"
+regex = "1"
+regex-syntax = "0.8"
+async-trait = "0.1"
+crossbeam-queue = "0.3.12"
+tokio = { version = "1", features = ["rt", "time"] }
+pollster = { version = "0.4", optional = true }
+smallvec = "1"
+ebpfsieve = { version = "0.1",  path = "../../../kernel/ebpfsieve", optional = true  }
+simdsieve = { version = "0.1",  path = "../../../matching/simdsieve", optional = true  }
+cudagrep = { version = "0.1", path = "../../../gpu/cudagrep", optional = true }
+
+[features]
+default = ["gpu", "jit", "fused", "pooled-buffers"]
+gpu = ["dep:wgpu", "dep:pollster"]
+software-gpu = ["gpu"]
+jit = ["dep:dfajit"]
+pooled-buffers = ["dep:bufpool"]
+fused = ["dep:ebpfsieve", "dep:simdsieve"]
+gpu-direct = ["dep:cudagrep", "gpu"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+rand = "0.8"
+proptest = "1.4.0"
+
+[[bench]]
+name = "cpu_scan"
+harness = false
+
+[[bench]]
+name = "cpu_vs_gpu"
+harness = false
+
+[[bench]]
+name = "criterion_benches"
+harness = false
+
+[[bench]]
+name = "dfa_huge_pages"
+harness = false
+
+[[bench]]
+name = "compact_dfa"
+harness = false
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[[test]]
+name = "break_it"
+path = "tests/break_it.rs"
+
+[lints.clippy]
+# Performance-critical matching engine — inline_always is intentional
+inline_always = "allow"
+# DFA states are u32 by design, never exceeds u32::MAX
+cast_possible_truncation = "allow"
+# Complex internal types are acceptable in a pattern matching engine
+type_complexity = "allow"
+too_many_arguments = "allow"
+too_many_lines = "allow"
+# Manual loops with counters are sometimes clearer for DFA traversal
+explicit_counter_loop = "allow"
+# Dead code exists behind feature gates
+dead_code = "allow"
+# Match arm dedup is intentional for clarity in state machines
+match_same_arms = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# Override workspace denies for internal expect() usage
+expect_used = "allow"
+module_name_repetitions = "allow"

@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+    "core",
+    # "bindings/python",  # uncomment when pyo3 deps are resolved
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/santhsecurity/Santh"
+authors = ["Corum Collective LLC <contact@santh.io>"]
+rust-version = "1.76"
+readme = "README.md"
+description = "GPU-accelerated multi-pattern matching — 5 backends from algebraic O(log n) DFA to double-buffered streaming"
+keywords = ["gpu", "pattern-matching", "dfa", "wgpu", "aho-corasick"]
+categories = ["algorithms", "text-processing"]
+
+[workspace.dependencies]
+warpstate = { path = "core" }
+matchkit = { version = "0.1", path = "../matchkit" }
+wgpu = "24"
+aho-corasick = "1"
+memchr = "2"
+regex-automata = "0.4.14"
+bytemuck = { version = "1", features = ["derive"] }
+thiserror = "2"
+tracing = "0.1"

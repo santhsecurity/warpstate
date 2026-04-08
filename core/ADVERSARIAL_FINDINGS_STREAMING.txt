@@ -1,0 +1,33 @@
+ADVERSARIAL REVIEW: warpstate/core (stream.rs, pipeline.rs, batch.rs)
+======================================================================
+Format: SEVERITY | file:line | description
+
+CRITICAL | src/stream.rs:86 | Silent match truncation when match count exceeds MAX_CPU_MATCHES (1,048,576) - visitor returns false but scan_with returns Ok(()) without indication of truncation
+CRITICAL | src/stream.rs:97 | Boundary match retention uses mat.end > overlap_len which retains matches that started in overlap but filters based on END position only - can cause incorrect offset adjustments for matches spanning boundary
+CRITICAL | src/stream.rs:129 | add_global_offset uses saturating_add which silently produces wrong offsets on overflow instead of erroring - base_offset.saturating_add(offset as usize) can saturate at usize::MAX
+CRITICAL | src/pipeline.rs:124 | StreamPipeline.scan() has NO regex DFA state preservation across chunks - regex patterns matching across chunk boundaries are LOST
+CRITICAL | src/pipeline.rs:159 | dedup_by merge logic forces shorter match via earlier.end = earlier.end.min(later.end) - silently truncates legitimate longer matches from same start position
+CRITICAL | src/batch.rs:117 | decoalesce silently drops all remaining matches via break when cursor advances past map.entries.len()
+CRITICAL | src/batch.rs:138 | usize to u32 conversion failure silently skips matches via continue instead of erroring - large items (>4GB) lose matches
+
+HIGH | src/stream.rs:103 | Overlap rotation logic keeps max_pattern_len bytes from window tail - when chunk < max_pattern_len, may re-include already-processed overlap data
+HIGH | src/stream.rs:68 | processed_bytes overflow check uses saturating_add but base_offset calculation (processed_bytes - overlap_len) can produce wrong values near u32::MAX boundary
+HIGH | src/pipeline.rs:134 | Offset adjustment uses saturating_add which silently caps at u32::MAX - m.start.saturating_add(offset_u32) produces wrong positions on overflow
+HIGH | src/batch.rs:131 | Cross-boundary match rejection via continue drops matches that span item boundaries - valid matches across concatenation point are lost
+HIGH | src/pipeline.rs:115 | effective_overlap calculation clamps to chunk_size-1 but doesn't validate overlap_window > 0, causing minimal overlap coverage
+
+MEDIUM | src/stream.rs:124 | finish() idempotency claim is misleading - behavior undefined if overlap contains complete matches from previous feed
+MEDIUM | src/batch.rs:82 | coalesce allocates Vec::with_capacity(total_size) up to 4GB without OOM handling - can panic on memory-constrained systems
+MEDIUM | src/pipeline.rs:108 | Single-chunk early return bypasses deduplication logic - inconsistent match characteristics between small and large inputs
+
+======================================================================
+SUMMARY: 7 CRITICAL + 5 HIGH + 3 MEDIUM = 15 FINDINGS
+QUALITY SCORE: 4/10
+VERDICT: REJECT
+
+REASONS:
+1. Silent truncation at multiple points (MAX_CPU_MATCHES, cursor overrun, u32 conversion)
+2. Offset corruption via saturating arithmetic producing wrong positions
+3. Regex matches lost at chunk boundaries due to no DFA state preservation
+4. Boundary conditions not exhaustively tested for chunk < pattern_len scenarios
+5. No adversarial tests for >1M matches or >4GB streams

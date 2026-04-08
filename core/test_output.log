@@ -1,0 +1,7 @@
+[localhost] FAILED (test failed, exit 101)
+
+2 error(s):
+  error[E0599]: no method named `scan_block` found for struct `persistent::PersistentMatcher` in the current scope
+  error: could not compile `warpstate` (lib test) due to 21 previous errors; 14 warnings emitted
+
+2 warning(s)

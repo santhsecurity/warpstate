@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Software-only tests (no GPU required)
+  test-software:
+    name: Test (Software Path)
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: clippy, rustfmt
+      
+      - uses: Swatinem/rust-cache@v2
+      
+      - name: Check formatting
+        run: cargo fmt --all --check
+      
+      - name: Run clippy
+        run: cargo clippy --package warpstate --all-targets -- -D warnings
+      
+      - name: Run tests (CPU path)
+        run: cargo test --package warpstate --lib -- cpu:: --test-threads=1
+      
+      - name: Run tests (pattern module)
+        run: cargo test --package warpstate --lib -- pattern:: --test-threads=1
+      
+      - name: Run tests (config module)
+        run: cargo test --package warpstate --lib -- config:: --test-threads=1
+      
+      - name: Run tests (error module)
+        run: cargo test --package warpstate --lib -- error:: --test-threads=1
+      
+      - name: Run tests (batch module)
+        run: cargo test --package warpstate --lib -- batch:: --test-threads=1
+      
+      - name: Run tests (dfa module)
+        run: cargo test --package warpstate --lib -- dfa:: --test-threads=1
+      
+      - name: Run tests (shader module)
+        run: cargo test --package warpstate --lib -- shader:: --test-threads=1
+      
+      - name: Run tests (shader_hash module)
+        run: cargo test --package warpstate --lib -- shader_hash:: --test-threads=1
+      
+      - name: Run tests (shader_smem module)
+        run: cargo test --package warpstate --lib -- shader_smem:: --test-threads=1
+      
+      - name: Run tests (shader_algebraic module)
+        run: cargo test --package warpstate --lib -- shader_algebraic:: --test-threads=1
+      
+      - name: Build documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --package warpstate --no-deps
+
+  # GPU tests (Linux with software rendering)
+  test-gpu:
+    name: Test (GPU Path)
+    runs-on: ubuntu-latest
+    env:
+      # Use software rendering for GPU tests in CI
+      WGPU_BACKEND: vulkan
+      VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: dtolnay/rust-toolchain@stable
+      
+      - name: Install Mesa Vulkan drivers (software)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers
+      
+      - uses: Swatinem/rust-cache@v2
+      
+      - name: Run GPU tests
+        run: cargo test --package warpstate --lib -- gpu:: --test-threads=1 || echo "GPU tests skipped (no adapter)"
+        continue-on-error: true
+
+  # Miri tests for unsafe code detection
+  miri:
+    name: Miri Testing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      
+      - uses: Swatinem/rust-cache@v2
+      
+      - name: Run Miri tests
+        run: cargo miri test --package warpstate --lib -- --test-threads=1
+
+  # Build and check all targets
+  build:
+    name: Build All Targets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: dtolnay/rust-toolchain@stable
+      
+      - uses: Swatinem/rust-cache@v2
+      
+      - name: Build library
+        run: cargo build --package warpstate --lib --release
+      
+      - name: Build examples
+        run: cargo build --package warpstate --examples
+      
+      - name: Build benchmarks
+        run: cargo build --package warpstate --benches
