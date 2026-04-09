@@ -17,7 +17,7 @@ documentation = "https://docs.rs/warpstate"
 [dependencies]
 arc-swap = "1"
 bufpool = { version = "0.1", path = "../../../memory/bufpool", package = "santh-bufpool", optional = true }
-matchkit = { version = "0.1", path = "../../matchkit" }
+matchkit.workspace = true
 wgpu = { version = "24", optional = true }
 aho-corasick = "1"
 dfajit = { version = "0.1",  path = "../../../matching/dfajit", optional = true  }

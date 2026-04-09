@@ -26,7 +26,7 @@ proptest! {
 
         let res1 = ps.scan(&input).unwrap();
         let mut out_matches = [warpstate::Match::from_parts(0, 0, 0); 1000];
-        let count = cpu::scan(ps.ir(), &input, &mut out_matches).unwrap();
+        let count = warpstate::scan(ps.ir(), &input, &mut out_matches).unwrap();
         let res2 = out_matches[..count].to_vec();
 
         prop_assert_eq!(res1.len(), res2.len());

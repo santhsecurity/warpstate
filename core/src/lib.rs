@@ -25,6 +25,7 @@
 //!
 //! ```rust,no_run
 //! # async fn example() {
+//! # #[cfg(feature = "gpu")] {
 //! use warpstate::{PatternSet, GpuMatcher};
 //!
 //! let patterns = PatternSet::builder()
@@ -36,6 +37,7 @@
 //! // GPU scan (10-100x faster on large inputs with many patterns)
 //! let gpu = GpuMatcher::new(&patterns).await.unwrap();
 //! let matches = gpu.scan(b"the password is secret_key").await.unwrap();
+//! # }
 //! # }
 //! ```
 //!
@@ -157,7 +159,7 @@ pub(crate) mod stream;
 
 pub use compiled_index::CompiledPatternIndex;
 pub use config::{AutoMatcherConfig, DEFAULT_GPU_THRESHOLD, DEFAULT_MAX_MATCHES};
-pub use cpu::{scan_aho_corasick, scan_count, scan_with, CachedScanner};
+pub use cpu::{scan, scan_aho_corasick, scan_count, scan_with, CachedScanner};
 pub use error::{Error, Result};
 #[cfg(feature = "fused")]
 pub use fused::FusedScanner;

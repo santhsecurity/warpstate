@@ -9,6 +9,7 @@ use crate::hash_scan::HashScanner;
 use crate::pattern::PatternIR;
 use crate::Match;
 
+/// CPU-based scanning implementations.
 pub mod scan;
 
 pub use self::scan::{scan, scan_aho_corasick, scan_count, scan_overlapping, scan_with};

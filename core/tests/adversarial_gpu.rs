@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use warpstate::batch::{scan_batch_gpu, ScanItem};
-use warpstate::GpuMatcher;
 use warpstate::persistent::PersistentMatcher;
+use warpstate::GpuMatcher;
 use warpstate::StreamPipeline;
 use warpstate::{AutoMatcher, AutoMatcherConfig, Error, Matcher, PatternSet};
 

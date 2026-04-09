@@ -373,7 +373,8 @@ mod tests {
     use super::*;
 
     fn block_on<F: std::future::Future>(future: F) -> F::Output {
-        pollster::block_on(future)
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(future)
     }
 
     #[test]
