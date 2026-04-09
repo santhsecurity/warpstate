@@ -3,8 +3,7 @@
 //! warpscan scans the ENTIRE internet's supply chain. A corrupted index means malware goes undetected.
 //! Every finding is critical at internet scale.
 
-use super::{CompiledPatternIndex, MAGIC, VERSION};
-use crate::Error;
+use super::CompiledPatternIndex;
 use crate::PatternSet;
 
 // =============================================================================

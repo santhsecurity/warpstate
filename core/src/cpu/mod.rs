@@ -472,7 +472,7 @@ mod tests {
 
 #[cfg(test)]
 mod p0_tests {
-    use super::*;
+    
     use crate::PatternSet;
 
     #[test]

@@ -6,7 +6,7 @@
 //! - Logic errors in edge cases
 //! - Incorrect match semantics
 
-use warpstate::{Error, Match, PatternSet};
+use warpstate::{Error, PatternSet};
 
 // =============================================================================
 // CRITICAL: Integer Overflow and Memory Exhaustion Tests
