@@ -1,8 +1,12 @@
 //! GPU backend — wgpu compute pipelines for literal and regex pattern matching.
 
+/// GPU matcher construction helpers.
 pub mod builder;
+/// GPU device acquisition and shared buffer utilities.
 pub mod device;
+/// GPU scan dispatch paths for literal/regex kernels.
 pub mod dispatch;
+/// GPU buffer map/readback helpers.
 pub mod readback;
 #[cfg(test)]
 #[cfg(not(miri))]

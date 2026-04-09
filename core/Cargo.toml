@@ -6,11 +6,11 @@ keywords = ["gpu", "pattern-matching", "aho-corasick", "wgpu", "dfa"]
 categories = ["algorithms", "text-processing", "concurrency"]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.76"
+rust-version = "1.85"
 license = "MIT"
-repository = "https://github.com/santhsecurity/warpstate"
+repository = "https://github.com/santhsecurity/Santh"
 authors = ["Corum Collective LLC <contact@santh.io>"]
-homepage = "https://github.com/santhsecurity/warpstate"
+homepage = "https://github.com/santhsecurity/Santh/tree/main/libs/performance/matching/warpstate"
 documentation = "https://docs.rs/warpstate"
 
 

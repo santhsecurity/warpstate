@@ -32,6 +32,7 @@ pub(crate) struct RegexUniforms {
     pub byte_classes: [[u32; 4]; 64],
 }
 
+/// GPU resources for literal prefilter+verify matching.
 #[derive(Debug)]
 pub struct LiteralGpu {
     pub(crate) prefilter_pipeline: wgpu::ComputePipeline,
@@ -48,6 +49,7 @@ pub struct LiteralGpu {
     pub(crate) hash_window_len: u32,
 }
 
+/// GPU resources for regex DFA matching.
 #[derive(Debug)]
 pub struct RegexGpu {
     pub(crate) pipeline: wgpu::ComputePipeline,

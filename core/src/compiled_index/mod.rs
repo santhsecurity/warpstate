@@ -9,7 +9,9 @@ use crate::dfa::RegexDFA;
 use crate::error::{Error, Result};
 use crate::literal_prefilter::LiteralPrefilterTable;
 
+/// Compiled-index serializer and builder implementation.
 pub mod builder;
+/// Query execution helpers for compiled indexes.
 pub mod query;
 
 pub(crate) const MAGIC: [u8; 8] = *b"WPSIDX01";
@@ -37,10 +39,15 @@ struct IndexLayout {
 }
 
 #[derive(Debug)]
+/// Parsed literal section extracted from a compiled index blob.
 pub struct ParsedLiterals {
+    /// Packed literal bytes blob.
     pub packed_bytes: Vec<u8>,
+    /// `(start, len)` spans into `packed_bytes` for each literal.
     pub offsets: Vec<(u32, u32)>,
+    /// Pattern id for each literal entry.
     pub literal_pattern_ids: Vec<usize>,
+    /// Prefix-hash prefilter table used by literal GPU/CPU fast paths.
     pub literal_prefilter_table: LiteralPrefilterTable,
 }
 
