@@ -275,7 +275,7 @@ fn gpu_scan_regex_input_too_large() {
 fn gpu_scan_inconsistent_match_count() {
     let ps = PatternSet::builder().literal("hello").build().unwrap();
     if let Ok(gpu) = block_on(GpuMatcher::new(&ps)) {
-        let device = &gpu.device;
+        let (device, queue) = gpu.gpu_device_queue();
         let count_staging = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::cast_slice(&[100u32, 0u32]),
@@ -289,8 +289,8 @@ fn gpu_scan_inconsistent_match_count() {
         });
 
         let result = block_on(readback::read_matches(
-            &gpu.device,
-            &gpu.queue,
+            &device,
+            &queue,
             &count_staging,
             &match_staging,
             Some(&[0]),
@@ -768,4 +768,82 @@ fn buffer_pool_huge_size_no_panic() {
             }));
         }
     }
+}
+
+
+// === Device Recovery Tests ===
+
+#[test]
+fn gpu_device_recovery_recreates_on_flag() {
+    let ps = PatternSet::builder().literal("hello").build().unwrap();
+    if let Ok(gpu) = block_on(GpuMatcher::new(&ps)) {
+        // Force a device recreation by setting the flag.
+        gpu.device_needs_recreation.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let matches = block_on(gpu.scan(b"hello world")).unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].pattern_id, 0);
+
+        // Flag should be cleared after successful recreation.
+        assert!(!gpu.device_needs_recreation.load(std::sync::atomic::Ordering::SeqCst));
+    }
+}
+
+#[test]
+fn gpu_device_recovery_concurrent_flag_set() {
+    let ps = PatternSet::builder().literal("test").build().unwrap();
+    if let Ok(gpu) = block_on(GpuMatcher::new(&ps)) {
+        let gpu = Arc::new(gpu);
+        let mut handles = vec![];
+
+        // Force recreation on every thread.
+        gpu.device_needs_recreation.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        for i in 0..4 {
+            let gpu_clone = Arc::clone(&gpu);
+            let data = format!("test data {i}").into_bytes();
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..5 {
+                    let matches = block_on(gpu_clone.scan(&data)).unwrap();
+                    assert!(!matches.is_empty());
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        assert!(!gpu.device_needs_recreation.load(std::sync::atomic::Ordering::SeqCst));
+    }
+}
+
+#[test]
+fn gpu_is_device_lost_error_detects_sentinel() {
+    let err = Error::GpuDeviceError {
+        reason: "GPU count buffer contains sentinel value — device may be lost or shader did not execute. Fix: retry with smaller input or check GPU health.".to_string(),
+    };
+    assert!(super::is_device_lost_error(&err));
+}
+
+#[test]
+fn gpu_is_device_lost_error_detects_timeout() {
+    let err = Error::GpuDeviceError {
+        reason: "GPU buffer map timed out after 30s: test".to_string(),
+    };
+    assert!(super::is_device_lost_error(&err));
+}
+
+#[test]
+fn gpu_is_device_lost_error_detects_buffer_map_failed() {
+    assert!(super::is_device_lost_error(&Error::BufferMapFailed));
+}
+
+#[test]
+fn gpu_is_device_lost_error_ignores_other_errors() {
+    let err = Error::InputTooLarge {
+        bytes: 1024,
+        max_bytes: 512,
+    };
+    assert!(!super::is_device_lost_error(&err));
 }

@@ -328,11 +328,7 @@ mod tests {
     use std::sync::Arc;
 
     fn block_on<F: std::future::Future>(future: F) -> F::Output {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(future)
+        pollster::block_on(future)
     }
 
     #[test]

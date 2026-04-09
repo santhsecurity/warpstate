@@ -115,8 +115,12 @@ impl SmemDfaMatcher {
             usage: wgpu::BufferUsages::STORAGE,
         });
 
-        let states = Arc::new(crossbeam_queue::ArrayQueue::new(2));
-        for _ in 0..2 {
+        let pool_size = std::thread::available_parallelism()
+            .map(|n| n.get() * 2)
+            .unwrap_or(4)
+            .clamp(2, 32);
+        let states = Arc::new(crossbeam_queue::ArrayQueue::new(pool_size));
+        for _ in 0..pool_size {
             let buffers = Self::allocate_buffers(&device, config.configured_gpu_max_input_size());
             let bind_group = Self::assemble_bind_group(
                 &device,

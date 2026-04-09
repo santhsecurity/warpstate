@@ -139,7 +139,7 @@ impl GpuScanner {
     /// for token-aware filtering) to share it without creating a new device.
     #[must_use]
     #[cfg(feature = "gpu")]
-    pub fn gpu_device_queue(&self) -> Option<(&wgpu::Device, &wgpu::Queue)> {
+    pub fn gpu_device_queue(&self) -> Option<(wgpu::Device, wgpu::Queue)> {
         match self.backend.as_ref() {
             Backend::Gpu(gpu) => Some(gpu.gpu_device_queue()),
             Backend::InitializationFailed { .. } => None,
@@ -149,7 +149,7 @@ impl GpuScanner {
 
 impl ByteScanner for GpuScanner {
     fn scan_bytes(&self, data: &[u8]) -> Result<Vec<Match>> {
-        self.scan(data)
+        self.scan_or_cpu_fallback(data)
     }
 }
 

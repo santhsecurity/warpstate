@@ -316,7 +316,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             if count < uniforms.max_matches {{
                 let pat_id = match_lists[last_match_ptr + 1u + m];
                 let pat_len = pattern_lengths[pat_id];
-                let end_pos = select(select(last_match_i, end_limit, eoi_matched), min(pos + pat_len, uniforms.input_len), pat_len != 0u);
+                let end_pos = select(select(last_match_i + 1u, end_limit, eoi_matched), min(pos + pat_len, uniforms.input_len), pat_len != 0u);
                 match_output[count] = vec4<u32>(pat_id, pos, end_pos, 0u);
             }} else {{
                 atomicStore(&match_count[1], 1u);
@@ -459,7 +459,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             if count < uniforms.max_matches {{
                 let pat_id = MATCH_LISTS[last_match_ptr + 1u + m];
                 let pat_len = PAT_LENGTHS[pat_id];
-                let end_pos = select(select(last_match_i, end_limit, eoi_matched), min(pos + pat_len, uniforms.input_len), pat_len != 0u);
+                let end_pos = select(select(last_match_i + 1u, end_limit, eoi_matched), min(pos + pat_len, uniforms.input_len), pat_len != 0u);
                 match_output[count] = vec4<u32>(pat_id, pos, end_pos, 0u);
             }} else {{
                 atomicStore(&match_count[1], 1u);

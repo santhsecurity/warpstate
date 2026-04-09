@@ -258,6 +258,7 @@ pub(crate) async fn scan_literal_chunk(
     };
     drop(candidate_count_data);
     candidate_count_staging.unmap();
+    candidate_count_staging.destroy();
 
     let return_gpu_resources = || {
         buffer_pool.return_buffer(candidate_buf, candidate_usage);
@@ -314,6 +315,8 @@ pub(crate) async fn scan_literal_chunk(
     )
     .await;
 
+    count_staging.destroy();
+    match_staging.destroy();
     return_gpu_resources();
 
     result
@@ -424,18 +427,24 @@ pub(crate) async fn scan_regex_chunk(
     encoder.copy_buffer_to_buffer(&match_buf, 0, &match_staging, 0, match_buf_size);
     queue.submit(Some(encoder.finish()));
 
+    input_buf.destroy();
+    count_buf.destroy();
+    uniform_buf.destroy();
+
     let result = readback::read_matches(
         device,
         queue,
         &count_staging,
         &match_staging,
-        None,
+        Some(&regex.pattern_ids),
         base_offset,
         max_matches,
         data.len(),
     )
     .await;
 
+    count_staging.destroy();
+    match_staging.destroy();
     buffer_pool.return_buffer(match_buf, match_usage);
 
     result
@@ -520,18 +529,24 @@ pub(crate) async fn scan_specialized_regex_chunk(
     encoder.copy_buffer_to_buffer(&match_buf, 0, &match_staging, 0, match_buf_size);
     queue.submit(Some(encoder.finish()));
 
+    input_buf.destroy();
+    count_buf.destroy();
+    uniform_buf.destroy();
+
     let result = readback::read_matches(
         device,
         queue,
         &count_staging,
         &match_staging,
-        None,
+        Some(&specialized.pattern_ids),
         base_offset,
         max_matches,
         data.len(),
     )
     .await;
 
+    count_staging.destroy();
+    match_staging.destroy();
     buffer_pool.return_buffer(match_buf, match_usage);
 
     result

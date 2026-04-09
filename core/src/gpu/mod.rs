@@ -12,6 +12,11 @@ pub mod readback;
 #[cfg(not(miri))]
 mod tests;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
+
 use crate::config::AutoMatcherConfig;
 use crate::error::{Error, Result};
 use crate::pattern::PatternSet;
@@ -25,6 +30,11 @@ pub(crate) use self::device::{
 };
 use self::dispatch::{LiteralGpu, RegexGpu, SpecializedRegexGpu};
 
+/// Returns `true` if the error may be resolved by recreating the GPU device.
+fn is_recoverable_gpu_error(error: &Error) -> bool {
+    matches!(error, Error::GpuDeviceError { .. } | Error::BufferMapFailed)
+}
+
 /// Default maximum input size per GPU chunk in bytes (128 MB).
 pub const DEFAULT_MAX_INPUT_SIZE: usize = 128 * 1024 * 1024;
 /// Default chunk size for GPU scans.
@@ -32,25 +42,34 @@ pub const DEFAULT_CHUNK_SIZE: usize = DEFAULT_MAX_INPUT_SIZE;
 /// Default overlap to preserve matches at chunk boundaries.
 pub const DEFAULT_CHUNK_OVERLAP: usize = 4096;
 
+/// Mutable GPU state that can be recreated after device loss.
+///
+/// The buffer pool is included here so that old buffers tied to a dead
+/// device are dropped along with the old state, preventing contamination
+/// of the new device's pool.
+#[derive(Debug)]
+struct GpuState {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    literal: Option<LiteralGpu>,
+    regex: Option<RegexGpu>,
+    specialized_regex: Option<SpecializedRegexGpu>,
+    buffer_pool: GpuBufferPool,
+}
+
 /// GPU-accelerated pattern matcher using wgpu compute shaders.
 #[derive(Debug)]
 pub struct GpuMatcher {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    state: ArcSwap<GpuState>,
+    device_needs_recreation: AtomicBool,
     patterns: PatternSet,
-    literal: Option<LiteralGpu>,
-    regex: Option<RegexGpu>,
-    /// Specialized regex with DFA constants baked into WGSL. Preferred over `regex`
-    /// when the DFA is small enough (< 16384 transitions).
-    specialized_regex: Option<SpecializedRegexGpu>,
     max_input_size: usize,
     max_regex_input_size: usize,
     chunk_size: usize,
     chunk_overlap: usize,
     max_matches: u32,
     hard_input_limit: bool,
-    /// Buffer pool for reusing GPU allocations across scans.
-    buffer_pool: GpuBufferPool,
+    config: AutoMatcherConfig,
 }
 
 impl GpuMatcher {
@@ -132,19 +151,7 @@ impl GpuMatcher {
             .min(max_buffer)
             .min(max_input_for_workgroups)
             .min(hard_u32_limit);
-        let effective_chunk = config
-            .configured_chunk_size()
-            .max(1)
-            .min(effective_max_input);
 
-        let literal = build_literal_gpu(&device, patterns)?;
-        // Try specialized shader first (DFA constants in WGSL), fall back to buffer-based
-        let specialized_regex = build_specialized_regex_gpu(&device, patterns)?;
-        let regex = if specialized_regex.is_some() {
-            None // Don't build buffer-based if specialized succeeds
-        } else {
-            build_regex_gpu(&device, patterns)?
-        };
         let chunk_overlap = config.configured_chunk_overlap().max(
             patterns
                 .ir()
@@ -154,32 +161,62 @@ impl GpuMatcher {
                 .max()
                 .unwrap_or(0),
         );
+        // Ensure a chunk plus its overlap never exceeds the device limit,
+        // preventing wgpu buffer allocation panics at chunk boundaries.
+        let effective_chunk = config
+            .configured_chunk_size()
+            .max(1)
+            .min(effective_max_input)
+            .min(effective_max_input.saturating_sub(chunk_overlap).max(1));
 
-        Ok(Self {
+        let literal = build_literal_gpu(&device, patterns)?;
+        // Try specialized shader first (DFA constants in WGSL), fall back to buffer-based
+        let specialized_regex = build_specialized_regex_gpu(&device, patterns)?;
+        let regex = if specialized_regex.is_some() {
+            None // Don't build buffer-based if specialized succeeds
+        } else {
+            build_regex_gpu(&device, patterns)?
+        };
+
+        let state = GpuState {
             device,
             queue,
-            patterns: patterns.clone(),
             literal,
             regex,
             specialized_regex,
+            buffer_pool: GpuBufferPool::default(),
+        };
+
+        // The regex DFA shader hardcodes a 16MB scan-depth cap. Allowing larger
+        // inputs silently produces false negatives. Clamp the API limit to match
+        // the shader guarantee.
+        let max_regex_input_size = config
+            .configured_gpu_max_regex_input_size()
+            .min(crate::config::DEFAULT_MAX_REGEX_INPUT_SIZE);
+
+        Ok(Self {
+            state: ArcSwap::from(Arc::new(state)),
+            device_needs_recreation: AtomicBool::new(false),
+            patterns: patterns.clone(),
             max_input_size: effective_max_input,
-            max_regex_input_size: config.configured_gpu_max_regex_input_size(),
+            max_regex_input_size,
             chunk_size: effective_chunk,
             chunk_overlap,
             max_matches: config.configured_max_matches(),
             hard_input_limit: false,
-            buffer_pool: GpuBufferPool::default(),
+            config,
         })
     }
 
     /// Scan input data for pattern matches on the GPU.
     pub async fn scan(&self, data: &[u8]) -> Result<Vec<Match>> {
         if data.is_empty() {
-            return Ok(Vec::new());
+            // Regex patterns may match empty input (e.g., `.*`). The GPU shaders
+            // dispatch zero workgroups on empty input, so fall back to CPU for
+            // correct empty-input semantics.
+            return self.fallback_cpu_scan(data);
         }
-        if (self.regex.is_some() || self.specialized_regex.is_some())
-            && data.len() > self.max_regex_input_size
-        {
+        if self.has_regex_pipeline() && data.len() > self.max_regex_input_size {
             return Err(Error::InputTooLarge {
                 bytes: data.len(),
                 max_bytes: self.max_regex_input_size,
@@ -192,71 +229,149 @@ impl GpuMatcher {
             });
         }
 
-        if data.len() <= self.chunk_size && data.len() <= self.max_input_size {
-            return self.scan_chunk(data, 0).await;
-        }
+        let result = self.scan_once(data).await;
 
-        let mut all_matches = Vec::new();
-        let mut start = 0usize;
-        while start < data.len() {
-            let nominal_end = start.saturating_add(self.chunk_size).min(data.len());
-            let chunk_end = nominal_end
-                .saturating_add(self.chunk_overlap)
-                .min(data.len());
-            let mut chunk_matches = self.scan_chunk(&data[start..chunk_end], start).await?;
-            chunk_matches.retain(|m| (m.start as usize) < nominal_end);
-            all_matches.extend(chunk_matches);
-            if nominal_end == data.len() {
-                break;
+        match result {
+            Ok(matches) => Ok(matches),
+            Err(e) if is_recoverable_gpu_error(&e) => {
+                self.device_needs_recreation.store(true, Ordering::SeqCst);
+                // Only the thread that successfully swaps the flag recreates.
+                if self.device_needs_recreation.swap(false, Ordering::SeqCst) {
+                    if self.recreate_device().await.is_err() {
+                        self.device_needs_recreation.store(true, Ordering::SeqCst);
+                        return self.fallback_cpu_scan(data);
+                    }
+                }
+                self.scan_once(data).await
             }
-            start = nominal_end;
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn scan_once(&self, data: &[u8]) -> Result<Vec<Match>> {
+        // If another thread detected device loss, try to recreate before scanning.
+        // swap(false) ensures only one thread actually performs recreation.
+        if self.device_needs_recreation.swap(false, Ordering::SeqCst) {
+            if self.recreate_device().await.is_err() {
+                self.device_needs_recreation.store(true, Ordering::SeqCst);
+                return Err(Error::GpuDeviceError {
+                    reason: "GPU device recreation failed".to_string(),
+                });
+            }
         }
 
-        all_matches.sort_unstable();
-        all_matches.dedup_by(|left, right| {
-            left.pattern_id == right.pattern_id
-                && left.start == right.start
-                && left.end == right.end
-        });
-        Ok(all_matches)
+        if data.len() <= self.chunk_size && data.len() <= self.max_input_size {
+            self.scan_chunk(data, 0).await
+        } else {
+            let mut all_matches = Vec::new();
+            let mut start = 0usize;
+            loop {
+                let nominal_end = start.saturating_add(self.chunk_size).min(data.len());
+                let chunk_end = nominal_end
+                    .saturating_add(self.chunk_overlap)
+                    .min(data.len());
+                match self.scan_chunk(&data[start..chunk_end], start).await {
+                    Ok(mut chunk_matches) => {
+                        chunk_matches.retain(|m| (m.start as usize) < nominal_end);
+                        all_matches.extend(chunk_matches);
+                    }
+                    Err(e) => break Err(e),
+                }
+                if nominal_end == data.len() {
+                    break Ok(all_matches);
+                }
+                start = nominal_end;
+            }
+        }
     }
 
     /// Synchronous scan for callers without an async runtime.
+    ///
+    /// Uses `pollster::block_on` — zero-allocation, no thread pool creation.
+    /// At scale (40K files/hr), creating a tokio runtime per file would exhaust
+    /// the blocking thread pool. pollster avoids this entirely.
     pub fn scan_blocking(&self, input: &[u8]) -> Result<Vec<Match>> {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| Error::GpuDeviceError {
-                reason: format!("tokio runtime creation failed: {e}"),
-            })?
-            .block_on(self.scan(input))
+        pollster::block_on(self.scan(input))
     }
 
-    /// Returns a reference to the underlying wgpu device and queue.
+    /// Returns a clone of the underlying wgpu device and queue.
     ///
     /// This enables other GPU-accelerated crates (e.g., `gputokenize`, `rulefire`)
     /// to share the same GPU context without creating a second device.
     #[must_use]
-    pub fn gpu_device_queue(&self) -> (&wgpu::Device, &wgpu::Queue) {
-        (&self.device, &self.queue)
+    pub fn gpu_device_queue(&self) -> (wgpu::Device, wgpu::Queue) {
+        let state = self.state.load_full();
+        (state.device.clone(), state.queue.clone())
     }
 
     pub(crate) fn chunk_overlap(&self) -> usize {
         self.chunk_overlap
     }
 
+    /// Recreate the wgpu device, queue, and all pipelines.
+    ///
+    /// Called automatically when a scan detects device loss. Thread-safe:
+    /// only the thread that successfully swaps the flag from true→false
+    /// performs the recreation; others observe the new state on retry.
+    async fn recreate_device(&self) -> Result<()> {
+        let device_queue = acquire_device().await?;
+        let (device, queue) = (device_queue.0.clone(), device_queue.1.clone());
+
+        let literal = build_literal_gpu(&device, &self.patterns)?;
+        let specialized_regex = build_specialized_regex_gpu(&device, &self.patterns)?;
+        let regex = if specialized_regex.is_some() {
+            None
+        } else {
+            build_regex_gpu(&device, &self.patterns)?
+        };
+
+        let state = GpuState {
+            device,
+            queue,
+            literal,
+            regex,
+            specialized_regex,
+            buffer_pool: GpuBufferPool::default(),
+        };
+
+        self.state.store(Arc::new(state));
+        self.device_needs_recreation.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Fall back to CPU scanning when the GPU is permanently unavailable.
+    fn fallback_cpu_scan(&self, data: &[u8]) -> Result<Vec<Match>> {
+        self.patterns.scan(data)
+    }
+
+    fn has_regex_pipeline(&self) -> bool {
+        let state = self.state.load_full();
+        state.regex.is_some() || state.specialized_regex.is_some()
+    }
+
     async fn scan_chunk(&self, data: &[u8], base_offset: usize) -> Result<Vec<Match>> {
+        let state = self.state.load_full();
         let mut matches = Vec::new();
-        if let Some(literal) = &self.literal {
-            matches.extend(self.scan_literal_chunk(literal, data, base_offset).await?);
+        if let Some(literal) = &state.literal {
+            matches.extend(
+                self.scan_literal_chunk(
+                    &state.device,
+                    &state.queue,
+                    &state.buffer_pool,
+                    literal,
+                    data,
+                    base_offset,
+                )
+                .await?,
+            );
         }
         // Prefer specialized regex (constants in shader) over buffer-based
-        if let Some(specialized) = &self.specialized_regex {
+        if let Some(specialized) = &state.specialized_regex {
             matches.extend(
                 dispatch::scan_specialized_regex_chunk(
-                    &self.device,
-                    &self.queue,
-                    &self.buffer_pool,
+                    &state.device,
+                    &state.queue,
+                    &state.buffer_pool,
                     specialized,
                     data,
                     base_offset,
@@ -265,8 +380,18 @@ impl GpuMatcher {
                 )
                 .await?,
             );
-        } else if let Some(regex) = &self.regex {
-            matches.extend(self.scan_regex_chunk(regex, data, base_offset).await?);
+        } else if let Some(regex) = &state.regex {
+            matches.extend(
+                self.scan_regex_chunk(
+                    &state.device,
+                    &state.queue,
+                    &state.buffer_pool,
+                    regex,
+                    data,
+                    base_offset,
+                )
+                .await?,
+            );
         }
         matches.sort_unstable();
         Ok(matches)
@@ -274,14 +399,17 @@ impl GpuMatcher {
 
     async fn scan_literal_chunk(
         &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        buffer_pool: &GpuBufferPool,
         literal: &LiteralGpu,
         data: &[u8],
         base_offset: usize,
     ) -> Result<Vec<Match>> {
         dispatch::scan_literal_chunk(
-            &self.device,
-            &self.queue,
-            &self.buffer_pool,
+            device,
+            queue,
+            buffer_pool,
             &self.patterns,
             literal,
             data,
@@ -294,14 +422,17 @@ impl GpuMatcher {
 
     async fn scan_regex_chunk(
         &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        buffer_pool: &GpuBufferPool,
         regex: &RegexGpu,
         data: &[u8],
         base_offset: usize,
     ) -> Result<Vec<Match>> {
         dispatch::scan_regex_chunk(
-            &self.device,
-            &self.queue,
-            &self.buffer_pool,
+            device,
+            queue,
+            buffer_pool,
             regex,
             data,
             base_offset,
@@ -319,6 +450,19 @@ pub(crate) fn to_u32_len(len: usize, max_bytes: usize) -> Result<u32> {
         bytes: len,
         max_bytes: max_bytes.min(hard_limit),
     })
+}
+
+/// Check if an error indicates the GPU device was lost.
+pub(crate) fn is_device_lost_error(err: &Error) -> bool {
+    match err {
+        Error::GpuDeviceError { reason } => {
+            reason.contains("sentinel")
+                || reason.contains("device may be lost")
+                || reason.contains("timed out")
+        }
+        Error::BufferMapFailed => true,
+        _ => false,
+    }
 }
 
 /// Check if the system GPU is a software renderer (llvmpipe, lavapipe, etc.)
