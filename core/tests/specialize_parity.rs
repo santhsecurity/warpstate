@@ -13,7 +13,7 @@ fn reference_scan(patterns: &PatternSet, data: &[u8]) -> Vec<warpstate::Match> {
     // Buffer must be larger than the maximum possible matches to avoid overflow.
     let capacity = data.len().max(64) + 1;
     let mut out_matches = vec![warpstate::Match::from_parts(0, 0, 0); capacity];
-    let count = warpstate::scan(patterns.ir(), data, &mut out_matches).unwrap();
+    let count = warpstate::cpu::scan(patterns.ir(), data, &mut out_matches).unwrap();
     out_matches[..count].to_vec()
 }
 
@@ -403,7 +403,7 @@ fn scan_with_parity() {
     let data = b"foo bar foo baz bar";
 
     let mut expected = Vec::new();
-    warpstate::scan_with(patterns.ir(), data, &mut |m| {
+    warpstate::cpu::scan_with(patterns.ir(), data, &mut |m| {
         expected.push(m);
         true
     })
@@ -434,7 +434,7 @@ fn scan_with_early_termination_parity() {
     // Collect only first 2 matches
     let mut expected = Vec::new();
     let mut count = 0;
-    warpstate::scan_with(patterns.ir(), data, &mut |m| {
+    warpstate::cpu::scan_with(patterns.ir(), data, &mut |m| {
         expected.push(m);
         count += 1;
         count < 2

@@ -3,7 +3,7 @@
 //! warpscan scans the ENTIRE internet's supply chain. A corrupted index means malware goes undetected.
 //! Every finding is critical at internet scale.
 
-use super::CompiledPatternIndex;
+use super::{CompiledPatternIndex, MAGIC, VERSION};
 use crate::Error;
 use crate::PatternSet;
 
@@ -17,7 +17,7 @@ fn load_truncated_header_fields() {
     let valid_bytes = CompiledPatternIndex::build(&patterns).unwrap();
 
     // Header is: magic(8) + version(4) + flags(4) + pattern_count(4) + literal_count(4) + regex_count(4) + hash_window(4) = 32 bytes
-    let _header_size = 8 + 4 + 4 + 4 + 4 + 4 + 4;
+    let header_size = 8 + 4 + 4 + 4 + 4 + 4 + 4;
 
     // Test truncation within header
     for truncate_at in [8, 9, 12, 16, 20, 24, 28, 31] {
@@ -33,10 +33,7 @@ fn load_truncated_header_fields() {
         match result {
             Err(Error::PatternCompilationFailed { reason }) => {
                 assert!(
-                    reason.contains("truncated")
-                        || reason.contains("CRC mismatch")
-                        || reason.contains("integrity")
-                        || reason.contains("overflowed"),
+                    reason.contains("truncated") || reason.contains("CRC mismatch") || reason.contains("integrity") || reason.contains("overflowed"),
                     "Error should mention truncation: {}",
                     reason
                 );

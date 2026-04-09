@@ -4,28 +4,28 @@ description = "GPU-accelerated multi-pattern matching — run thousands of liter
 readme = "README.md"
 keywords = ["gpu", "pattern-matching", "aho-corasick", "wgpu", "dfa"]
 categories = ["algorithms", "text-processing", "concurrency"]
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.76"
-license = "MIT"
-repository = "https://github.com/santhsecurity/warpstate"
-authors = ["Corum Collective LLC <contact@santh.io>"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository = "https://github.com/santhsecurity/Santh"
+authors.workspace = true
 homepage = "https://github.com/santhsecurity/warpstate"
 documentation = "https://docs.rs/warpstate"
 
 
 [dependencies]
 arc-swap = "1"
-bufpool = { version = "0.1", path = "../../../memory/bufpool", package = "santh-bufpool", optional = true }
+bufpool = { version = "0.1",  path = "../../../memory/bufpool", optional = true  }
 matchkit.workspace = true
-wgpu = { version = "24", optional = true }
-aho-corasick = "1"
+wgpu = { workspace = true, optional = true }
+aho-corasick.workspace = true
 dfajit = { version = "0.1",  path = "../../../matching/dfajit", optional = true  }
-memchr = "2"
-regex-automata = "0.4.14"
-bytemuck = { version = "1", features = ["derive"] }
-thiserror = "2"
-tracing = "0.1"
+memchr.workspace = true
+regex-automata.workspace = true
+bytemuck.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
 libc = "0.2"
 parking_lot = "0.12"
 regex = "1"
@@ -82,9 +82,6 @@ harness = false
 name = "break_it"
 path = "tests/break_it.rs"
 
-[lints.rust]
-dead_code = "allow"
-
 [lints.clippy]
 # Performance-critical matching engine — inline_always is intentional
 inline_always = "allow"
@@ -97,6 +94,7 @@ too_many_lines = "allow"
 # Manual loops with counters are sometimes clearer for DFA traversal
 explicit_counter_loop = "allow"
 # Dead code exists behind feature gates
+dead_code = "allow"
 # Match arm dedup is intentional for clarity in state machines
 match_same_arms = "allow"
 missing_errors_doc = "allow"

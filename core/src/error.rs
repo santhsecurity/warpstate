@@ -37,10 +37,6 @@ pub enum Error {
         reason: String,
     },
 
-    /// A DFA transition lookup exceeded the serialized table bounds.
-    #[error("DFA transition table index out of bounds. Fix: rebuild the compiled pattern set.")]
-    DfaOutOfBounds,
-
     /// Pattern offsets or lengths do not fit in 32-bit index space.
     #[error("pattern payload is too large for this backend (pattern {index} has {bytes} bytes). Fix: keep each pattern below {max} bytes or split the set into smaller groups.")]
     PatternTooLarge {

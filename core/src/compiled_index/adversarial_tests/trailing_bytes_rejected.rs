@@ -3,7 +3,7 @@
 //! warpscan scans the ENTIRE internet's supply chain. A corrupted index means malware goes undetected.
 //! Every finding is critical at internet scale.
 
-use super::CompiledPatternIndex;
+use super::{CompiledPatternIndex, MAGIC, VERSION};
 use crate::Error;
 use crate::PatternSet;
 
@@ -26,9 +26,7 @@ fn trailing_bytes_rejected() {
     match result {
         Err(Error::PatternCompilationFailed { reason }) => {
             assert!(
-                reason.contains("trailing")
-                    || reason.contains("CRC mismatch")
-                    || reason.contains("integrity"),
+                reason.contains("trailing") || reason.contains("CRC mismatch") || reason.contains("integrity"),
                 "Error should mention trailing bytes: {}",
                 reason
             );

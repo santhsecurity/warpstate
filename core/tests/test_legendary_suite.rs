@@ -1,8 +1,7 @@
-#![cfg(feature = "gpu")]
 //! Legendary test suite generated to meet 50+ test requirement.
 use std::sync::Arc;
 #[cfg(feature = "gpu")]
-use warpstate::GpuMatcher;
+use warpstate::gpu::GpuMatcher;
 use warpstate::{Match, Matcher, PatternSet};
 
 #[test]

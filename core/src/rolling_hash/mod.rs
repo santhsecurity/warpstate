@@ -236,30 +236,28 @@ mod tests {
         pollster::block_on(future)
     }
 
-    fn matcher_or_skip(patterns: &[&[u8]]) -> Result<Option<RollingHashMatcher>> {
+    fn matcher_or_skip(patterns: &[&[u8]]) -> Option<RollingHashMatcher> {
         match block_on(RollingHashMatcher::new(patterns)) {
-            Ok(matcher) => Ok(Some(matcher)),
+            Ok(matcher) => Some(matcher),
             Err(Error::NoGpuAdapter) => {
                 eprintln!("skipping rolling-hash GPU test: no GPU adapter available");
-                Ok(None)
+                None
             }
-            Err(err) => Err(err.into()),
+            Err(err) => panic!("failed to build rolling-hash matcher: {err:?}"),
         }
     }
 
-    fn scan_or_skip(patterns: &[&[u8]], data: &[u8]) -> Result<Option<Vec<Match>>> {
-        let Some(matcher) = matcher_or_skip(patterns)? else {
-            return Ok(None);
-        };
+    fn scan_or_skip(patterns: &[&[u8]], data: &[u8]) -> Option<Vec<Match>> {
+        let matcher = matcher_or_skip(patterns)?;
         match block_on(matcher.scan_block(data)) {
-            Ok(gpu_matches) => Ok(Some(gpu_matches)),
-            Err(err) => Err(err.into()),
+            Ok(gpu_matches) => Some(gpu_matches),
+            Err(err) => panic!("rolling-hash scan failed: {err:?}"),
         }
     }
 
     #[test]
     fn hash_single_pattern() {
-        let Some(matches) = scan_or_skip(&[b"secret"], b"top secret value").unwrap() else {
+        let Some(matches) = scan_or_skip(&[b"secret"], b"top secret value") else {
             return;
         };
         assert_eq!(
@@ -280,7 +278,7 @@ mod tests {
             b"ten0",
         ];
         let data = b"two0 egt0 one0 ten0";
-        let Some(matches) = scan_or_skip(&patterns, data).unwrap() else {
+        let Some(matches) = scan_or_skip(&patterns, data) else {
             return;
         };
         let ids: Vec<u32> = matches.iter().map(|mat| mat.pattern_id).collect();
@@ -291,7 +289,7 @@ mod tests {
     fn hash_multiple_different_lengths() {
         let patterns: Vec<&[u8]> = vec![b"abc", b"wxyz", b"literal"];
         let data = b"abc wxyz literal abc";
-        let Some(matches) = scan_or_skip(&patterns, data).unwrap() else {
+        let Some(matches) = scan_or_skip(&patterns, data) else {
             return;
         };
         assert_eq!(matches.len(), 4);
@@ -305,7 +303,7 @@ mod tests {
     fn hash_matches_cpu_parity() {
         let patterns = [b"alpha".as_slice(), b"beta".as_slice(), b"gamma".as_slice()];
         let data = b"alpha beta gamma alpha gamma";
-        let Some(gpu_matches) = scan_or_skip(&patterns, data).unwrap() else {
+        let Some(gpu_matches) = scan_or_skip(&patterns, data) else {
             return;
         };
 
@@ -321,7 +319,7 @@ mod tests {
 
     #[test]
     fn hash_overlapping_matches() {
-        let Some(matches) = scan_or_skip(&[b"ab"], b"abab").unwrap() else {
+        let Some(matches) = scan_or_skip(&[b"ab"], b"abab") else {
             return;
         };
         assert_eq!(
@@ -346,7 +344,7 @@ mod tests {
     #[test]
     #[ignore = "GPU shader parity bug under software Vulkan; requires WGSL debugging."]
     fn hash_no_false_positives() {
-        let Some(matches) = scan_or_skip(&[b"abcdef"], b"abcdeg abcdefg abcdee").unwrap() else {
+        let Some(matches) = scan_or_skip(&[b"abcdef"], b"abcdeg abcdefg abcdee") else {
             return;
         };
         assert!(matches.is_empty());
@@ -354,7 +352,7 @@ mod tests {
 
     #[test]
     fn hash_empty_input() {
-        let Some(matcher) = matcher_or_skip(&[b"anything"]).unwrap() else {
+        let Some(matcher) = matcher_or_skip(&[b"anything"]) else {
             return;
         };
         let gpu_matches = block_on(matcher.scan_block(b"")).unwrap();
@@ -368,7 +366,7 @@ mod tests {
             .collect();
         let pattern_refs: Vec<&[u8]> = patterns.iter().map(Vec::as_slice).collect();
         let data = b"prefix pattern-0007 middle pattern-0420 suffix pattern-0999";
-        let Some(matches) = scan_or_skip(&pattern_refs, data).unwrap() else {
+        let Some(matches) = scan_or_skip(&pattern_refs, data) else {
             return;
         };
         let ids: Vec<u32> = matches.iter().map(|mat| mat.pattern_id).collect();
@@ -377,7 +375,7 @@ mod tests {
 
     #[test]
     fn hash_pattern_at_end_of_input() {
-        let Some(matches) = scan_or_skip(&[b"tail"], b"look-at-the-tail").unwrap() else {
+        let Some(matches) = scan_or_skip(&[b"tail"], b"look-at-the-tail") else {
             return;
         };
         assert_eq!(matches.len(), 1);

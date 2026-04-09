@@ -1,4 +1,3 @@
-#![cfg(feature = "gpu")]
 //! Property-based tests for warpstate using proptest.
 //!
 //! These tests verify fundamental invariants of the scanning engine:

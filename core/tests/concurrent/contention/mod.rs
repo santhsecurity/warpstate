@@ -1,4 +1,3 @@
-#![cfg(feature = "gpu")]
 use std::sync::Arc;
 use std::thread;
 use warpstate::*;
@@ -24,7 +23,7 @@ fn test_gpu_resource_pool_contention() {
     const GPU_THRESHOLD: usize = 65_536; // 64KB from router.rs
     let input_size = GPU_THRESHOLD + 10_000;
 
-    for _i in 0..10 {
+    for i in 0..10 {
         let ps_clone = Arc::clone(&ps);
         handles.push(thread::spawn(move || {
             let mut data = vec![b'A'; input_size];

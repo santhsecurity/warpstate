@@ -1,4 +1,3 @@
-#![cfg(feature = "gpu")]
 //! Exhaustive adversarial tests for warpstate
 //!
 //! These tests are designed to BREAK the engine or prove it survives across:
@@ -653,7 +652,7 @@ fn cpu_input_size_check_exists() {
         "IR offsets should not be empty (sanity check)"
     );
     let mut matches = [warpstate::Match::from_parts(0, 0, 0); 10];
-    let result = warpstate::scan(ir, &[0u8; 1024], &mut matches);
+    let result = warpstate::cpu::scan(ir, &[0u8; 1024], &mut matches);
     assert!(
         result.is_ok(),
         "Normal 1KB input should scan successfully through internal scan()"

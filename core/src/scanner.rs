@@ -20,12 +20,12 @@ impl ByteScanner for PatternSet {
 
 impl ByteScanner for HotSwapPatternSet {
     fn scan_bytes(&self, data: &[u8]) -> Result<Vec<Match>> {
-        let estimate = crate::specialize::estimate_match_capacity(data.len());
-        let mut matches = Vec::with_capacity(estimate);
-        self.scan_with(data, |matched| {
-            matches.push(matched);
-            true
-        })?;
+        let mut matches = vec![
+            Match::from_parts(0, 0, 0);
+            crate::specialize::estimate_match_capacity(data.len())
+        ];
+        let count = self.scan(data, &mut matches)?;
+        matches.truncate(count);
         Ok(matches)
     }
 }

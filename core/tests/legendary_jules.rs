@@ -1,9 +1,8 @@
-#![cfg(feature = "gpu")]
 use std::sync::Arc;
 use warpstate::{Match, Matcher, PatternSet};
 
 #[cfg(feature = "gpu")]
-use warpstate::GpuMatcher;
+use warpstate::gpu::GpuMatcher;
 
 // Helper to check match positions exactly
 #[track_caller]
@@ -43,5 +42,5 @@ fn test_boundary_conditions() {
 
     // Pattern spanning end (partially matching at the end shouldn't match)
     let matches = ps.scan(b"test_boundar").unwrap();
-    assert_matches(&matches, &[(10, 11)]);
+    assert_matches(&matches, &[]);
 }

@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use warpstate::PatternSet;
 
-
 #[test]
 fn test_01_build_pattern_set_892_literals() {
     let mut builder = PatternSet::builder();
@@ -12,9 +11,9 @@ fn test_01_build_pattern_set_892_literals() {
         input.push_str(&format!("keyhog_pattern_{:04} ", i));
     }
     let set = builder.build().unwrap();
-    
+
     let matches = set.scan(input.as_bytes()).unwrap();
-    
+
     assert_eq!(matches.len(), 892);
     for i in 0..892 {
         assert_eq!(matches[i].pattern_id, i as u32);
@@ -41,14 +40,15 @@ fn test_04_overlapping_prefix() {
     let set = PatternSet::builder()
         .literal("overlap")
         .literal("over")
-        .build().unwrap();
-    
+        .build()
+        .unwrap();
+
     // Non-overlapping scan returns only the first match (longest or first defined depending on AC implementation)
     // For AC, it usually returns the earliest match in overlapping, but non-overlapping depends on strategy.
     // The requirement says "BOTH match (overlapping)". We should use `scan_overlapping`.
     let matches = set.scan_overlapping(b"overlap").unwrap();
-    
-    // Let's assert what they are. 
+
+    // Let's assert what they are.
     assert_eq!(matches.len(), 2);
     // Usually "over" matches at 0..4, and "overlap" at 0..7
     // Let's print to see or just assert they exist.
@@ -86,7 +86,7 @@ fn test_07_scan_1_byte_input() {
     let set = PatternSet::builder().literal("a").build().unwrap();
     let matches = set.scan(b"a").unwrap();
     assert_eq!(matches.len(), 1);
-    
+
     let matches2 = set.scan(b"b").unwrap();
     assert_eq!(matches2.len(), 0);
 }
@@ -96,7 +96,7 @@ fn test_08_scan_100mb_input() {
     let set = PatternSet::builder().literal("needle").build().unwrap();
     let mut input = vec![b'a'; 100 * 1024 * 1024];
     input.extend_from_slice(b"needle");
-    
+
     let matches = set.scan(&input).unwrap();
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].start as usize, 100 * 1024 * 1024);
@@ -112,7 +112,10 @@ fn test_09_exponential_blowup_prevention() {
 
 #[test]
 fn test_10_pattern_with_null_bytes() {
-    let set = PatternSet::builder().literal_bytes(b"a\0b").build().unwrap();
+    let set = PatternSet::builder()
+        .literal_bytes(b"a\0b")
+        .build()
+        .unwrap();
     let matches = set.scan(b"xa\0by").unwrap();
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].start, 1);
@@ -145,7 +148,7 @@ fn test_13_10000_patterns() {
     let set = builder.build().unwrap();
     let elapsed = start.elapsed();
     assert!(elapsed.as_secs() < 1, "Built in {:?}", elapsed);
-    
+
     let matches = set.scan(b"keyhog_pattern_09999").unwrap();
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].pattern_id, 9999);
@@ -157,8 +160,9 @@ fn test_14_duplicate_patterns() {
     let set = PatternSet::builder()
         .literal("dup")
         .literal("dup")
-        .build().unwrap();
-        
+        .build()
+        .unwrap();
+
     let matches = set.scan_overlapping(b"dup").unwrap();
     assert_eq!(matches.len(), 2);
     assert_eq!(matches[0].pattern_id, 0);
@@ -184,16 +188,15 @@ fn test_15_very_long_pattern() {
 fn test_16_scan_after_builder_error() {
     let set_err = PatternSet::builder().literal("").build();
     assert!(set_err.is_err());
-    
+
     let set_ok = PatternSet::builder().literal("ok").build().unwrap();
     let matches = set_ok.scan(b"ok").unwrap();
     assert_eq!(matches.len(), 1);
 }
 #[test]
 fn test_17_thread_safety() {
-    
     let set = Arc::new(PatternSet::builder().literal("thread").build().unwrap());
-    
+
     let mut threads = vec![];
     for _ in 0..10 {
         let set = Arc::clone(&set);
@@ -202,7 +205,7 @@ fn test_17_thread_safety() {
             assert_eq!(matches.len(), 1);
         }));
     }
-    
+
     for t in threads {
         t.join().unwrap();
     }
@@ -228,7 +231,8 @@ fn test_20_match_ids_insertion_order() {
         .literal("a")
         .literal("b")
         .literal("c")
-        .build().unwrap();
+        .build()
+        .unwrap();
     let matches = set.scan(b"c b a").unwrap();
     // They are returned in sorted start offset order:
     // start 0 is "c", ID 2
@@ -261,8 +265,9 @@ fn test_23_mix_literal_and_regex() {
     let set = PatternSet::builder()
         .literal("literal")
         .regex("[0-9]{3}")
-        .build().unwrap();
-        
+        .build()
+        .unwrap();
+
     let matches = set.scan(b"literal 123").unwrap();
     assert_eq!(matches.len(), 2);
     assert_eq!(matches[0].pattern_id, 0);
@@ -282,8 +287,9 @@ fn test_25_common_prefix() {
         .literal("sk_live_123")
         .literal("sk_test_456")
         .literal("sk_live_abc")
-        .build().unwrap();
-        
+        .build()
+        .unwrap();
+
     let matches = set.scan(b"sk_live_abc and sk_test_456").unwrap();
     assert_eq!(matches.len(), 2);
     assert_eq!(matches[0].pattern_id, 2);
@@ -299,7 +305,7 @@ fn test_26_simd_boundaries() {
     let m1 = set.scan(&input32).unwrap();
     assert_eq!(m1.len(), 1);
     assert_eq!(m1[0].start, 24);
-    
+
     // 64 bytes
     let mut input64 = vec![b'y'; 64];
     input64[56..64].copy_from_slice(b"boundary");
@@ -310,7 +316,10 @@ fn test_26_simd_boundaries() {
 
 #[test]
 fn test_27_all_zeros() {
-    let set = PatternSet::builder().literal_bytes(vec![0, 0, 0]).build().unwrap();
+    let set = PatternSet::builder()
+        .literal_bytes(vec![0, 0, 0])
+        .build()
+        .unwrap();
     let input = vec![0; 10];
     let matches = set.scan_overlapping(&input).unwrap();
     assert_eq!(matches.len(), 8);
@@ -318,7 +327,10 @@ fn test_27_all_zeros() {
 
 #[test]
 fn test_28_all_ff() {
-    let set = PatternSet::builder().literal_bytes(vec![0xFF, 0xFF]).build().unwrap();
+    let set = PatternSet::builder()
+        .literal_bytes(vec![0xFF, 0xFF])
+        .build()
+        .unwrap();
     let input = vec![0xFF; 5];
     let matches = set.scan_overlapping(&input).unwrap();
     assert_eq!(matches.len(), 4);
@@ -346,20 +358,18 @@ fn test_30_memory_drop() {
 fn test_31_clone() {
     let set = PatternSet::builder().literal("clone_test").build().unwrap();
     let set_2 = set.clone();
-    
+
     let m1 = set.scan(b"clone_test").unwrap();
     let m2 = set_2.scan(b"clone_test").unwrap();
     assert_eq!(m1, m2);
 }
 #[test]
 fn test_32_serialize_deserialize_index() {
-    let set = PatternSet::builder()
-        .literal("index_test")
-        .build().unwrap();
-        
+    let set = PatternSet::builder().literal("index_test").build().unwrap();
+
     let index_bytes = warpstate::CompiledPatternIndex::build(&set).unwrap();
     let loaded_index = warpstate::CompiledPatternIndex::load(&index_bytes).unwrap();
-    
+
     let matches = loaded_index.scan(b"this is an index_test").unwrap();
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].start, 11);
@@ -377,11 +387,10 @@ fn test_33_scan_gpu_disabled() {
 #[test]
 fn test_34_scan_overlapping_vs_non_overlapping() {
     let set = PatternSet::builder().literal("ana").build().unwrap();
-    
+
     let non_overlap = set.scan(b"banana").unwrap();
     assert_eq!(non_overlap.len(), 1); // Only the first 'ana' starting at index 1 is found
-    
+
     let overlap = set.scan_overlapping(b"banana").unwrap();
     assert_eq!(overlap.len(), 2); // 'ana' starting at 1, 'ana' starting at 3
 }
-

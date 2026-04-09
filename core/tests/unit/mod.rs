@@ -1,4 +1,3 @@
-#![cfg(feature = "gpu")]
 //! Tests for streaming and chunked execution.
 //!
 //! These tests define the DESIRED behavior for a legendary GPU engine:

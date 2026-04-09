@@ -3,8 +3,8 @@
 //! Verifies invariants across backends, serialization, and edge cases.
 
 use proptest::prelude::*;
-use warpstate::CompiledPatternIndex;
-use warpstate::PatternSet;
+use warpstate::compiled_index::CompiledPatternIndex;
+use warpstate::{cpu, PatternSet};
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(10000))]
@@ -26,7 +26,7 @@ proptest! {
 
         let res1 = ps.scan(&input).unwrap();
         let mut out_matches = [warpstate::Match::from_parts(0, 0, 0); 1000];
-        let count = warpstate::scan(ps.ir(), &input, &mut out_matches).unwrap();
+        let count = cpu::scan(ps.ir(), &input, &mut out_matches).unwrap();
         let res2 = out_matches[..count].to_vec();
 
         prop_assert_eq!(res1.len(), res2.len());

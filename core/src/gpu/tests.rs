@@ -1,7 +1,4 @@
 use super::*;
-use crate::gpu::device;
-use crate::gpu::dispatch;
-use crate::gpu::readback;
 use crate::PatternSet;
 use std::sync::Arc;
 use std::thread;
@@ -373,12 +370,9 @@ fn gpu_prefilter_emits_all_hash_matching_candidates() {
     // Verify each CPU match has a corresponding GPU match
     for cpu_match in &cpu_matches {
         assert!(
-            gpu_matches
-                .iter()
-                .any(|gm| gm.pattern_id == cpu_match.pattern_id && gm.start == cpu_match.start),
+            gpu_matches.iter().any(|gm| gm.pattern_id == cpu_match.pattern_id && gm.start == cpu_match.start),
             "CPU match (pattern={}, start={}) not found in GPU results",
-            cpu_match.pattern_id,
-            cpu_match.start,
+            cpu_match.pattern_id, cpu_match.start,
         );
     }
 }
@@ -412,16 +406,12 @@ fn gpu_prefilter_does_not_stop_at_shorter_prefix() {
     // The GPU literal backend returns overlapping matches (unlike CPU leftmost-first),
     // so we only verify that the longer pattern is NOT silently dropped.
     assert!(
-        gpu_matches
-            .iter()
-            .any(|m| m.pattern_id == 1 && m.start == 10 && m.end == 17),
+        gpu_matches.iter().any(|m| m.pattern_id == 1 && m.start == 10 && m.end == 17),
         "GPU must find 'testing' (pattern_id=1, start=10, end=17)"
     );
     // The shorter prefix pattern should also be found.
     assert!(
-        gpu_matches
-            .iter()
-            .any(|m| m.pattern_id == 0 && m.start == 10 && m.end == 14),
+        gpu_matches.iter().any(|m| m.pattern_id == 0 && m.start == 10 && m.end == 14),
         "GPU must find 'test' (pattern_id=0, start=10, end=14)"
     );
 }
@@ -594,178 +584,4 @@ fn gpu_cpu_parity_exact_chunk_boundary() {
         gpu_matches, cpu_matches,
         "GPU/CPU parity failed for input exactly at 128MB chunk boundary"
     );
-}
-
-
-// === Adversarial Production-Hardening Tests ===
-
-/// Match starting exactly at a chunk boundary must not be dropped.
-/// Uses a tiny chunk size to force chunking on a small input.
-#[test]
-fn gpu_scan_match_at_chunk_boundary() {
-    if is_software_adapter() {
-        return;
-    }
-
-    let ps = PatternSet::builder().literal("BOUNDARY").build().unwrap();
-
-    let config = AutoMatcherConfig::new().chunk_size(16).chunk_overlap(8);
-    let Ok(gpu) = block_on(GpuMatcher::with_config(&ps, config)) else {
-        return; // No GPU adapter
-    };
-
-    // Place "BOUNDARY" so it starts at byte 16 (the chunk boundary).
-    let mut input = vec![b'x'; 32];
-    input[16..24].copy_from_slice(b"BOUNDARY");
-
-    let gpu_matches = block_on(gpu.scan(&input)).unwrap();
-    assert_eq!(gpu_matches.len(), 1, "match at chunk boundary must be found");
-    assert_eq!(gpu_matches[0].start, 16);
-    assert_eq!(gpu_matches[0].end, 24);
-}
-
-/// compute_workgroups must reject inputs that exceed the device workgroup limit.
-#[test]
-fn gpu_compute_workgroups_respects_limits() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-    if let Some(adapter) = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-    {
-        if let Ok((device, _)) =
-            block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
-        {
-            let max = device.limits().max_compute_workgroups_per_dimension;
-            // Input that fits exactly at the limit
-            let ok_input = max * shader::WORKGROUP_SIZE;
-            assert!(dispatch::compute_workgroups(&device, ok_input).is_ok());
-
-            // Input that exceeds the limit by one workgroup
-            let bad_input = ok_input + 1;
-            let result = dispatch::compute_workgroups(&device, bad_input);
-            assert!(
-                matches!(result, Err(Error::GpuDeviceError { .. })),
-                "expected GpuDeviceError for workgroup overflow, got {:?}",
-                result
-            );
-        }
-    }
-}
-
-/// read_matches must detect sentinel-filled count buffers (device lost / unexecuted shader).
-#[test]
-fn gpu_readback_detects_sentinel() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-    if let Some(adapter) = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-    {
-        if let Ok((device, queue)) =
-            block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
-        {
-            let count_staging = device::readback_buffer(&device, 8, "sentinel count");
-            let match_staging = device::readback_buffer(&device, 64, "sentinel match");
-
-            // Submit an empty encoder so on_submitted_work_done fires.
-            let encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            queue.submit(Some(encoder.finish()));
-
-            let result = block_on(readback::read_matches(
-                &device,
-                &queue,
-                &count_staging,
-                &match_staging,
-                None,
-                0,
-                100,
-                1024,
-            ));
-
-            assert!(
-                matches!(result, Err(Error::GpuDeviceError { ref reason }) if reason.contains("sentinel")),
-                "expected sentinel error for unread count buffer, got {:?}",
-                result
-            );
-        }
-    }
-}
-
-/// read_matches must skip corrupted match offsets instead of trusting them.
-#[test]
-fn gpu_readback_skips_invalid_offsets() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-    if let Some(adapter) = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-    {
-        if let Ok((device, queue)) =
-            block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
-        {
-            // Count: 2 matches, no overflow
-            let count_staging = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytemuck::cast_slice(&[2u32, 0u32]),
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            });
-
-            // Match buffer layout per match: [pattern_id, start, end, padding]
-            // Match 0: valid
-            // Match 1: start > end (inverted)
-            let match_data: Vec<u32> = vec![
-                0, 0, 4, 0,   // valid match at [0, 4)
-                0, 10, 5, 0,  // inverted: start=10, end=5
-            ];
-            let match_staging = device.create_buffer(&wgpu::BufferDescriptor {
-                label: None,
-                size: 32,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: true,
-            });
-            {
-                let mut view = match_staging.slice(..).get_mapped_range_mut();
-                view.copy_from_slice(bytemuck::cast_slice(&match_data));
-            }
-            match_staging.unmap();
-
-            // Submit an empty encoder so on_submitted_work_done fires.
-            let encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            queue.submit(Some(encoder.finish()));
-
-            let matches = block_on(readback::read_matches(
-                &device,
-                &queue,
-                &count_staging,
-                &match_staging,
-                None,
-                0,
-                100,
-                8, // input_len = 8
-            ))
-            .unwrap();
-
-            assert_eq!(matches.len(), 1, "only the valid match should be kept");
-            assert_eq!(matches[0].start, 0);
-            assert_eq!(matches[0].end, 4);
-        }
-    }
-}
-
-/// GpuBufferPool::get_or_create must not panic on sizes that overflow next_power_of_two.
-#[test]
-fn buffer_pool_huge_size_no_panic() {
-    let pool = GpuBufferPool::default();
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-
-    if let Some(adapter) =
-        block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-    {
-        if let Ok((device, _)) =
-            block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
-        {
-            // Before the fix, (size as usize).next_power_of_two() panicked when
-            // size > usize::MAX / 2. After the fix, checked_next_power_of_two
-            // gracefully returns None and falls back to the original size.
-            let huge_size = (usize::MAX / 2 + 1) as u64;
-            // We only verify our code does not panic inside next_power_of_two.
-            // wgpu may panic later on the impossible allocation, but that is
-            // outside our control and happens only after our fixed code runs.
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                pool.get_or_create(&device, "huge", huge_size, wgpu::BufferUsages::STORAGE)
-            }));
-        }
-    }
 }

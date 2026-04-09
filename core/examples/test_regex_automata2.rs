@@ -27,7 +27,7 @@ fn main() {
             println!("match at pos {}: offset {}", pos, m.offset());
 
             // To find overlapping starts, we do a backwards search
-            let match_start = m.offset();
+            let mut match_start = m.offset();
             let mut best_start = match_start;
             for candidate in (0..m.offset()).rev() {
                 let input_a = Input::new(haystack)

@@ -154,8 +154,8 @@ fn cpu_single_byte_input_two_byte_pattern() {
 /// directly using the internal constant logic
 #[test]
 fn cpu_input_too_large_error() {
-    use warpstate::scan;
-    use warpstate::PatternIR;
+    use warpstate::cpu::scan;
+    use warpstate::pattern::PatternIR;
 
     let ps = PatternSet::builder().literal("test").build().unwrap();
 

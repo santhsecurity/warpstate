@@ -433,9 +433,7 @@ fn scan_single_regex(
     let re = compiled.get_or_init(|| {
         // Invalid regex patterns compile to a regex that matches nothing
         regex::bytes::Regex::new(pattern).unwrap_or_else(|_| {
-            #[allow(clippy::expect_used)]
-            let r = regex::bytes::Regex::new("a^").expect("valid regex"); // Never matches
-            r
+            regex::bytes::Regex::new("a^").expect("valid regex") // Never matches
         })
     });
 
@@ -488,9 +486,7 @@ where
     let re = compiled.get_or_init(|| {
         // Invalid regex patterns compile to a regex that matches nothing
         regex::bytes::Regex::new(pattern).unwrap_or_else(|_| {
-            #[allow(clippy::expect_used)]
-            let r = regex::bytes::Regex::new("a^").expect("valid regex"); // Never matches
-            r
+            regex::bytes::Regex::new("a^").expect("valid regex") // Never matches
         })
     });
 

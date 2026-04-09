@@ -1,12 +1,12 @@
 #![cfg(feature = "fused")]
 #![cfg(feature = "jit")]
 
-use std::sync::Arc;
-use warpstate::{FusedScanner, PatternSet, Error, AutoMatcherConfig};
-use warpstate::compiled_index::CompiledPatternIndex;
 use ebpfsieve::{ByteFrequencyFilter, ByteThreshold};
-use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+use std::sync::Arc;
+use warpstate::compiled_index::CompiledPatternIndex;
+use warpstate::{AutoMatcherConfig, Error, FusedScanner, PatternSet};
 
 // 1. FusedScanner optimization correctness: JIT vs interpreted parity on 1000 random inputs.
 #[test]
@@ -26,7 +26,7 @@ fn test_01_fused_jit_vs_interpreted_parity_1000_random_inputs() {
         let mut data: Vec<u8> = (0..len).map(|_| rng.gen()).collect();
         if rng.gen_bool(0.1) {
             let offset = rng.gen_range(0..data.len().saturating_sub(6));
-            data[offset..offset+5].copy_from_slice(b"virus");
+            data[offset..offset + 5].copy_from_slice(b"virus");
         }
         let jit_matches = scanner.scan(&data).unwrap();
         let interpreted_matches = patterns.scan(&data).unwrap();
@@ -37,16 +37,13 @@ fn test_01_fused_jit_vs_interpreted_parity_1000_random_inputs() {
 // 2. ebpfsieve byte-frequency prefilter rejects then full scan still finds ALL matches
 #[test]
 fn test_02_ebpfsieve_prefilter_rejects_then_full_scan_finds_all_matches() {
-    let patterns = PatternSet::builder()
-        .literal("needle")
-        .build()
-        .unwrap();
+    let patterns = PatternSet::builder().literal("needle").build().unwrap();
     let filter = ByteFrequencyFilter::new([ByteThreshold::new(b'n', 1)]).unwrap();
     let scanner = FusedScanner::new(patterns.clone(), Some(filter));
-    
+
     let mut data = vec![b'x'; 8192];
     data[8000..8006].copy_from_slice(b"needle");
-    
+
     let matches = scanner.scan(&data).unwrap();
     let base_matches = patterns.scan(&data).unwrap();
     assert_eq!(matches.len(), base_matches.len());
@@ -82,8 +79,12 @@ fn test_04_pattern_set_1_literal_1_regex_same_offset() {
     let mut found_regex = false;
     for m in &matches {
         if m.start == 10 {
-            if m.pattern_id == 0 { found_literal = true; }
-            if m.pattern_id == 1 { found_regex = true; }
+            if m.pattern_id == 0 {
+                found_literal = true;
+            }
+            if m.pattern_id == 1 {
+                found_regex = true;
+            }
         }
     }
     assert!(found_literal && found_regex);
@@ -103,26 +104,33 @@ fn test_05_compiled_pattern_index_serialize_crc_flip_1_bit_fails() {
 // 6. Scan 128MB input in chunks and verify match offsets are globally correct not chunk-relative
 #[tokio::test]
 async fn test_06_scan_128mb_input_in_chunks_global_offsets() {
-    let patterns = PatternSet::builder().literal("chunk_boundary_match").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("chunk_boundary_match")
+        .build()
+        .unwrap();
     // Default config typically has chunk size 128MB or some fixed size. Let's explicitly set to 10MB chunk.
-    let config = AutoMatcherConfig::new().chunk_size(10 * 1024 * 1024).chunk_overlap(1024);
-    let matcher = warpstate::AutoMatcher::with_config(&patterns, config).await.unwrap();
-    
+    let config = AutoMatcherConfig::new()
+        .chunk_size(10 * 1024 * 1024)
+        .chunk_overlap(1024);
+    let matcher = warpstate::AutoMatcher::with_config(&patterns, config)
+        .await
+        .unwrap();
+
     // Test the 128MB buffer size
     let mut data = vec![b'x'; 128 * 1024 * 1024];
-    
+
     // First match in the first chunk
     let first_match_idx = 10 * 1024;
-    data[first_match_idx..first_match_idx+20].copy_from_slice(b"chunk_boundary_match");
+    data[first_match_idx..first_match_idx + 20].copy_from_slice(b"chunk_boundary_match");
 
     // Second match straddling 10MB chunk boundary
     let straddle_idx = 10 * 1024 * 1024 - 10;
-    data[straddle_idx..straddle_idx+20].copy_from_slice(b"chunk_boundary_match");
+    data[straddle_idx..straddle_idx + 20].copy_from_slice(b"chunk_boundary_match");
 
     // Third match deep in the 12th chunk
     let deep_idx = 115 * 1024 * 1024;
-    data[deep_idx..deep_idx+20].copy_from_slice(b"chunk_boundary_match");
-    
+    data[deep_idx..deep_idx + 20].copy_from_slice(b"chunk_boundary_match");
+
     let matches = matcher.scan(&data).await.unwrap();
     assert_eq!(matches.len(), 3);
     assert_eq!(matches[0].start, first_match_idx as u32);
@@ -152,7 +160,9 @@ fn test_08_exactly_max_chunk_size_no_match() {
 async fn test_09_small_block_overlap_boundary() {
     let patterns = PatternSet::builder().literal("12345").build().unwrap();
     let config = AutoMatcherConfig::new().chunk_size(10).chunk_overlap(4);
-    let matcher = warpstate::AutoMatcher::with_config(&patterns, config).await.unwrap();
+    let matcher = warpstate::AutoMatcher::with_config(&patterns, config)
+        .await
+        .unwrap();
     let data = b"123451234512345";
     let matches = matcher.scan(data).await.unwrap();
     assert_eq!(matches.len(), 3);
@@ -186,10 +196,12 @@ fn test_12_fused_scanner_aborts_early_via_visitor() {
     let scanner = FusedScanner::new(patterns.clone(), None);
     let data = b"abort abort abort";
     let mut count = 0;
-    scanner.scan_with(data, |_| {
-        count += 1;
-        false // Abort immediately
-    }).unwrap();
+    scanner
+        .scan_with(data, |_| {
+            count += 1;
+            false // Abort immediately
+        })
+        .unwrap();
     assert_eq!(count, 1);
 }
 
@@ -215,7 +227,12 @@ fn test_14_massive_regex_count_fails_gracefully_or_builds() {
 // 15. All patterns are single bytes, verify literal automaton works
 #[test]
 fn test_15_all_patterns_single_byte() {
-    let patterns = PatternSet::builder().literal("a").literal("b").literal("c").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("a")
+        .literal("b")
+        .literal("c")
+        .build()
+        .unwrap();
     let scanner = FusedScanner::new(patterns.clone(), None);
     let data = b"cba";
     let matches = scanner.scan(data).unwrap();
@@ -225,9 +242,13 @@ fn test_15_all_patterns_single_byte() {
 // 16. Unicode case insensitive massive chunk boundary
 #[test]
 fn test_16_unicode_case_insensitive_chunk_boundary() {
-    // Some implementations might handle this differently. 
+    // Some implementations might handle this differently.
     // Testing case insensitivity of unicode character handling.
-    let patterns = PatternSet::builder().case_insensitive(true).literal("über").build().unwrap();
+    let patterns = PatternSet::builder()
+        .case_insensitive(true)
+        .literal("über")
+        .build()
+        .unwrap();
     let scanner = FusedScanner::new(patterns.clone(), None);
     // use unicode bytes manually
     let data: &[u8] = b"x \xC3\x9Cber y";
@@ -239,7 +260,10 @@ fn test_16_unicode_case_insensitive_chunk_boundary() {
 #[test]
 fn test_17_fused_jit_compile_failure_graceful_fallback() {
     // Some complex un-jittable literal logic or just default checking
-    let patterns = PatternSet::builder().literal("some_literal").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("some_literal")
+        .build()
+        .unwrap();
     let scanner = FusedScanner::new(patterns.clone(), None);
     let matches = scanner.scan(b"some_literal").unwrap();
     assert_eq!(matches.len(), 1);
@@ -250,7 +274,9 @@ fn test_17_fused_jit_compile_failure_graceful_fallback() {
 async fn test_18_exact_chunk_size_single_match() {
     let patterns = PatternSet::builder().literal("chunk").build().unwrap();
     let config = AutoMatcherConfig::new().chunk_size(5).chunk_overlap(1);
-    let matcher = warpstate::AutoMatcher::with_config(&patterns, config).await.unwrap();
+    let matcher = warpstate::AutoMatcher::with_config(&patterns, config)
+        .await
+        .unwrap();
     let data = b"chunk";
     let matches = matcher.scan(data).await.unwrap();
     assert_eq!(matches.len(), 1);
@@ -269,9 +295,12 @@ fn test_19_empty_input_byte_slice() {
 #[test]
 fn test_20_very_long_pattern_exceeding_window() {
     let long_pattern = "a".repeat(10000);
-    let patterns = PatternSet::builder().literal(&long_pattern).build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal(&long_pattern)
+        .build()
+        .unwrap();
     let scanner = FusedScanner::new(patterns.clone(), None);
-    
+
     let mut data = vec![b'b'; 20000];
     data[100..10100].copy_from_slice(long_pattern.as_bytes());
     let matches = scanner.scan(&data).unwrap();
@@ -295,7 +324,11 @@ fn test_21_match_at_exact_end() {
 #[test]
 fn test_22_fused_with_regex_disables_filter() {
     // Fused prefilters are disabled for mixed literal/regex.
-    let patterns = PatternSet::builder().literal("lit").regex("re[g]ex").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("lit")
+        .regex("re[g]ex")
+        .build()
+        .unwrap();
     let filter = ByteFrequencyFilter::new([ByteThreshold::new(b'l', 1)]).unwrap();
     let scanner = FusedScanner::new(patterns.clone(), Some(filter));
     // Provide a string that the filter WOULD reject (no 'l')
@@ -364,14 +397,20 @@ fn test_27_missing_magic_bytes() {
 fn test_28_regex_pathological_repetition() {
     let err = PatternSet::builder().regex("a{1000}").build();
     if let Err(e) = err {
-        assert!(matches!(e, Error::PathologicalRegex { .. }) || matches!(e, Error::PatternCompilationFailed { .. }));
+        assert!(
+            matches!(e, Error::PathologicalRegex { .. })
+                || matches!(e, Error::PatternCompilationFailed { .. })
+        );
     }
 }
 
 // 29. Null byte literal scanning works
 #[test]
 fn test_29_null_byte_literal_scanning() {
-    let patterns = PatternSet::builder().literal_bytes(vec![0x00, 0x01, 0x00]).build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal_bytes(vec![0x00, 0x01, 0x00])
+        .build()
+        .unwrap();
     let scanner = FusedScanner::new(patterns.clone(), None);
     let data = [0x00, 0x01, 0x00, 0x00, 0x01, 0x00];
     let matches = scanner.scan(&data).unwrap();
@@ -381,7 +420,10 @@ fn test_29_null_byte_literal_scanning() {
 // 30. SimdSieve with non-alphabetic candidates
 #[test]
 fn test_30_simd_sieve_non_alphabetic() {
-    let patterns = PatternSet::builder().literal_bytes(vec![0xFF, 0xFE, 0xFD]).build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal_bytes(vec![0xFF, 0xFE, 0xFD])
+        .build()
+        .unwrap();
     let scanner = FusedScanner::new(patterns.clone(), None);
     let data = [0xFF, 0xFE, 0xFD, 0x00];
     let matches = scanner.scan(&data).unwrap();
@@ -410,7 +452,10 @@ fn test_32_truncated_index_rebuild_error() {
 fn test_33_empty_string_named_regex() {
     let err = PatternSet::builder().named_regex("empty", "^$").build();
     if let Err(e) = err {
-        assert!(matches!(e, Error::PatternCompilationFailed { .. }) || matches!(e, Error::PathologicalRegex { .. }));
+        assert!(
+            matches!(e, Error::PatternCompilationFailed { .. })
+                || matches!(e, Error::PathologicalRegex { .. })
+        );
     }
 }
 

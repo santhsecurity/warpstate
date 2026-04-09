@@ -79,12 +79,7 @@ impl CompiledPatternIndex {
         // Future versions (> VERSION) are rejected after magic+version parse, not here.
         if serialized.len() >= 16 {
             let version_bytes = &serialized[8..12];
-            let version = u32::from_le_bytes([
-                version_bytes[0],
-                version_bytes[1],
-                version_bytes[2],
-                version_bytes[3],
-            ]);
+            let version = u32::from_le_bytes([version_bytes[0], version_bytes[1], version_bytes[2], version_bytes[3]]);
             if version == 3 {
                 let payload = &serialized[..serialized.len() - 4];
                 let stored_crc = u32::from_le_bytes([
@@ -107,13 +102,8 @@ impl CompiledPatternIndex {
 
         // For v3 indexes, exclude the CRC trailer from the parsing window.
         let parse_end = if serialized.len() >= 16 {
-            let v =
-                u32::from_le_bytes([serialized[8], serialized[9], serialized[10], serialized[11]]);
-            if v == 3 {
-                serialized.len() - 4
-            } else {
-                serialized.len()
-            }
+            let v = u32::from_le_bytes([serialized[8], serialized[9], serialized[10], serialized[11]]);
+            if v == 3 { serialized.len() - 4 } else { serialized.len() }
         } else {
             serialized.len()
         };
