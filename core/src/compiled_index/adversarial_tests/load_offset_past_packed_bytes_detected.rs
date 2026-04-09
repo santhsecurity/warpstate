@@ -3,7 +3,7 @@
 //! warpscan scans the ENTIRE internet's supply chain. A corrupted index means malware goes undetected.
 //! Every finding is critical at internet scale.
 
-use super::{CompiledPatternIndex, MAGIC, VERSION};
+use super::CompiledPatternIndex;
 use crate::Error;
 use crate::PatternSet;
 
@@ -54,7 +54,10 @@ fn load_offset_past_packed_bytes_detected() {
         match result {
             Err(Error::PatternCompilationFailed { reason }) => {
                 assert!(
-                    reason.contains("outside") || reason.contains("overflows") || reason.contains("CRC mismatch") || reason.contains("integrity"),
+                    reason.contains("outside")
+                        || reason.contains("overflows")
+                        || reason.contains("CRC mismatch")
+                        || reason.contains("integrity"),
                     "Error should mention offset outside bounds: {}",
                     reason
                 );

@@ -1,4 +1,5 @@
 use crate::error::{Error, Result};
+use crate::gpu::device::READBACK_SENTINEL;
 use crate::Match;
 
 /// Maximum time to wait for a GPU buffer map before declaring timeout.
@@ -88,8 +89,18 @@ pub(crate) async fn read_matches(
     }
     let match_count = count_array[0] as usize;
     let overflow_flag = count_array[1];
+
+    // Detect device-lost / unexecuted shader by checking for sentinel bytes.
+    let count_bytes: &[u8] = bytemuck::cast_slice(&count_data);
+    let all_sentinel = count_bytes.iter().all(|&b| b == READBACK_SENTINEL);
     drop(count_data);
     count_staging.unmap();
+
+    if all_sentinel {
+        return Err(Error::GpuDeviceError {
+            reason: "GPU count buffer contains sentinel value — device may be lost or shader did not execute. Fix: retry with smaller input or check GPU health.".to_string(),
+        });
+    }
 
     if overflow_flag != 0 {
         return Err(Error::MatchBufferOverflow {
@@ -101,90 +112,114 @@ pub(crate) async fn read_matches(
         return Ok(Vec::new());
     }
 
-    await_buffer_map(
-        device,
-        queue,
-        match_staging,
-        "waiting for GPU match buffer",
-    )
-    .await?;
+    await_buffer_map(device, queue, match_staging, "waiting for GPU match buffer").await?;
 
-    let match_data = match_staging.slice(..).get_mapped_range();
-    let raw: &[u32] = bytemuck::cast_slice(&match_data);
+    // Scope match_data so it is dropped before unmap, avoiding borrow issues
+    // across error paths inside the loop.
+    let result: Result<Vec<Match>> = {
+        let match_data = match_staging.slice(..).get_mapped_range();
+        let raw: &[u32] = bytemuck::cast_slice(&match_data);
 
-    if match_count
-        .checked_mul(4)
-        .map_or(true, |needed| needed > raw.len())
-    {
-        return Err(Error::GpuDeviceError {
-            reason: format!(
-                "GPU returned inconsistent match count {} for buffer of length {}",
-                match_count,
-                raw.len()
-            ),
-        });
-    }
-
-    let mut matches = Vec::with_capacity(match_count);
-    for i in 0..match_count {
-        let base = i * 4;
-        let gpu_start = raw[base + 1] as usize;
-        let gpu_end = raw[base + 2] as usize;
-
-        // Validate match offsets against the chunk input length — corrupted GPU output
-        // could return offsets past the end of the input buffer.
-        if gpu_end > input_len {
-            tracing::warn!(
-                gpu_start,
-                gpu_end,
-                input_len,
-                "GPU returned match offset past input length, skipping"
-            );
-            continue;
+        if match_count
+            .checked_mul(4)
+            .map_or(true, |needed| needed > raw.len())
+        {
+            return Err(Error::GpuDeviceError {
+                reason: format!(
+                    "GPU returned inconsistent match count {} for buffer of length {}",
+                    match_count,
+                    raw.len()
+                ),
+            });
         }
 
-        let start_offset = base_offset.checked_add(gpu_start).ok_or(Error::InputTooLarge {
-            bytes: usize::MAX,
-            max_bytes: u32::MAX as usize,
-        })?;
-        let end_offset = base_offset.checked_add(gpu_end).ok_or(Error::InputTooLarge {
-            bytes: usize::MAX,
-            max_bytes: u32::MAX as usize,
-        })?;
-        let start = u32::try_from(start_offset).map_err(|_| Error::InputTooLarge {
-            bytes: start_offset,
-            max_bytes: u32::MAX as usize,
-        })?;
-        let end = u32::try_from(end_offset).map_err(|_| Error::InputTooLarge {
-            bytes: end_offset,
-            max_bytes: u32::MAX as usize,
-        })?;
+        let mut matches = Vec::with_capacity(match_count);
+        for i in 0..match_count {
+            let base = i * 4;
+            let gpu_start = raw[base + 1] as usize;
+            let gpu_end = raw[base + 2] as usize;
 
-        let user_pattern_id = match pattern_ids {
-            Some(ids) => {
-                let gpu_pattern_idx = raw[base] as usize;
-                let Some(&id) = ids.get(gpu_pattern_idx) else {
-                    return Err(Error::GpuDeviceError {
-                        reason: format!(
-                            "GPU returned out-of-bounds pattern index {} (pattern_count={}). Fix: GPU/CPU state mismatch indicates a critical bug.",
-                            gpu_pattern_idx,
-                            ids.len()
-                        ),
-                    });
-                };
-                id as u32
+            // Validate match offsets against the chunk input length — corrupted GPU output
+            // could return offsets past the end of the input buffer.
+            if gpu_start > input_len {
+                tracing::warn!(
+                    gpu_start,
+                    gpu_end,
+                    input_len,
+                    "GPU returned match start past input length, skipping"
+                );
+                continue;
             }
-            None => raw[base],
-        };
+            if gpu_end > input_len {
+                tracing::warn!(
+                    gpu_start,
+                    gpu_end,
+                    input_len,
+                    "GPU returned match end past input length, skipping"
+                );
+                continue;
+            }
+            if gpu_start > gpu_end {
+                tracing::warn!(
+                    gpu_start,
+                    gpu_end,
+                    "GPU returned inverted match offsets (start > end), skipping"
+                );
+                continue;
+            }
 
-        matches.push(Match {
-            pattern_id: user_pattern_id,
-            start,
-            end,
-            padding: 0,
-        });
-    }
-    drop(match_data);
+            let start_offset = base_offset
+                .checked_add(gpu_start)
+                .ok_or(Error::InputTooLarge {
+                    bytes: usize::MAX,
+                    max_bytes: u32::MAX as usize,
+                })?;
+            let end_offset = base_offset
+                .checked_add(gpu_end)
+                .ok_or(Error::InputTooLarge {
+                    bytes: usize::MAX,
+                    max_bytes: u32::MAX as usize,
+                })?;
+            let start = u32::try_from(start_offset).map_err(|_| Error::InputTooLarge {
+                bytes: start_offset,
+                max_bytes: u32::MAX as usize,
+            })?;
+            let end = u32::try_from(end_offset).map_err(|_| Error::InputTooLarge {
+                bytes: end_offset,
+                max_bytes: u32::MAX as usize,
+            })?;
+
+            let user_pattern_id = match pattern_ids {
+                Some(ids) => {
+                    let gpu_pattern_idx = raw[base] as usize;
+                    let Some(&id) = ids.get(gpu_pattern_idx) else {
+                        return Err(Error::GpuDeviceError {
+                            reason: format!(
+                                "GPU returned out-of-bounds pattern index {} (pattern_count={}). Fix: GPU/CPU state mismatch indicates a critical bug.",
+                                gpu_pattern_idx,
+                                ids.len()
+                            ),
+                        });
+                    };
+                    u32::try_from(id).map_err(|_| Error::GpuDeviceError {
+                        reason: format!(
+                            "pattern id {id} exceeds u32::MAX. Fix: reduce pattern count or use smaller pattern indices.",
+                        ),
+                    })?
+                }
+                None => raw[base],
+            };
+
+            matches.push(Match {
+                pattern_id: user_pattern_id,
+                start,
+                end,
+                padding: 0,
+            });
+        }
+        Ok(matches)
+    };
+
     match_staging.unmap();
-    Ok(matches)
+    result
 }

@@ -357,15 +357,13 @@ mod tests {
             });
 
             let result = block_on(gpu.read_matches(&count_staging, &match_staging));
-            match result {
-                Err(Error::GpuDeviceError { reason }) => {
-                    assert!(reason.contains("inconsistent match count"));
-                }
-                _ => panic!(
-                    "Expected GpuDeviceError due to inconsistency, got {:?}",
-                    result
+            assert!(
+                matches!(
+                    result,
+                    Err(Error::GpuDeviceError { ref reason }) if reason.contains("inconsistent match count")
                 ),
-            }
+                "expected GpuDeviceError due to inconsistency, got {result:?}"
+            );
         }
     }
 }

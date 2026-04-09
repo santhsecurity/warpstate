@@ -7,7 +7,7 @@
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use warpstate::{Match, PatternSet};
+use warpstate::PatternSet;
 
 /// Reference implementation using regex crate directly.
 fn reference_scan(pattern: &str, data: &[u8]) -> Vec<(usize, usize)> {

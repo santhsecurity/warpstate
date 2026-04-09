@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "jit")]
 use dfajit::JitDfa;
-use regex_automata::dfa::{dense, Automaton};
+use regex_automata::dfa::dense;
 
 use crate::error::{Error, Result};
 
@@ -53,88 +53,91 @@ pub struct CompactDfa {
 
 impl CompactDfa {
     #[inline(always)]
-    #[must_use]
-    pub fn is_match_state(&self, state: u32) -> bool {
+    fn flag_byte(&self, state: u32) -> u8 {
         debug_assert!(
             (state as usize) < self.flags.len(),
             "DFA state {state} out of bounds (max {})",
             self.flags.len()
         );
-        // SAFETY: state is bounds-checked in debug, table is sized to max state
-        unsafe { *self.flags.get_unchecked(state as usize) & 1 != 0 }
+        // SAFETY: bounds validation and unchecked access stay adjacent.
+        unsafe { *self.flags.get_unchecked(state as usize) }
+    }
+
+    #[inline(always)]
+    #[must_use]
+    pub fn is_match_state(&self, state: u32) -> bool {
+        self.flag_byte(state) & 1 != 0
     }
 
     #[inline(always)]
     #[must_use]
     pub fn is_dead_state(&self, state: u32) -> bool {
-        debug_assert!(
-            (state as usize) < self.flags.len(),
-            "DFA state {state} out of bounds (max {})",
-            self.flags.len()
-        );
-        // SAFETY: state is bounds-checked in debug, table is sized to max state
-        unsafe { *self.flags.get_unchecked(state as usize) & 2 != 0 }
+        self.flag_byte(state) & 2 != 0
     }
 
     #[inline(always)]
     #[must_use]
     pub fn is_quit_state(&self, state: u32) -> bool {
-        debug_assert!(
-            (state as usize) < self.flags.len(),
-            "DFA state {state} out of bounds (max {})",
-            self.flags.len()
-        );
-        // SAFETY: state is bounds-checked in debug, table is sized to max state
-        unsafe { *self.flags.get_unchecked(state as usize) & 4 != 0 }
+        self.flag_byte(state) & 4 != 0
     }
 
-    /// Cold path for state bounds check failure.
-    #[cold]
-    #[inline(never)]
-    #[allow(clippy::unused_self)]
-    fn next_state_oob(&self) -> ! {
-        panic!("DFA transition table index out of bounds")
+    #[inline(always)]
+    fn transition_index(&self, state: u32, class: usize) -> usize {
+        let idx = (state as usize) * self.class_count + class;
+        debug_assert!(idx / self.class_count == state as usize);
+        idx
+    }
+
+    #[inline(always)]
+    fn transition_u4(trans: &[u8], idx: usize) -> u32 {
+        let packed_idx = idx / 2;
+        debug_assert!(packed_idx < trans.len());
+        // SAFETY: bounds validation and unchecked access stay adjacent.
+        let val = unsafe { *trans.get_unchecked(packed_idx) };
+        if idx % 2 == 0 {
+            (val & 0x0F) as u32
+        } else {
+            (val >> 4) as u32
+        }
+    }
+
+    #[inline(always)]
+    fn transition_u8(trans: &[u8], idx: usize) -> u32 {
+        debug_assert!(idx < trans.len());
+        // SAFETY: bounds validation and unchecked access stay adjacent.
+        unsafe { *trans.get_unchecked(idx) as u32 }
+    }
+
+    #[inline(always)]
+    fn transition_u32(trans: &[u32], idx: usize) -> u32 {
+        debug_assert!(idx < trans.len());
+        // SAFETY: bounds validation and unchecked access stay adjacent.
+        unsafe { *trans.get_unchecked(idx) }
     }
 
     #[inline(always)]
     pub fn next_state(&self, state: u32, byte: u8) -> u32 {
         let class = self.byte_classes[usize::from(byte)] as usize;
-        let idx = (state as usize) * self.class_count + class;
+        let idx = self.transition_index(state, class);
 
         if let Some(trans) = &self.trans_u4 {
-            // SAFETY: idx is bounded by state_count * class_count
-            let val = unsafe { *trans.get_unchecked(idx / 2) };
-            if idx % 2 == 0 {
-                (val & 0x0F) as u32
-            } else {
-                (val >> 4) as u32
-            }
+            Self::transition_u4(trans, idx)
         } else if let Some(trans) = &self.trans_u8 {
-            // SAFETY: idx is bounded by state_count * class_count
-            unsafe { *trans.get_unchecked(idx) as u32 }
+            Self::transition_u8(trans, idx)
         } else {
-            // SAFETY: idx is bounded by state_count * class_count
-            unsafe { *self.trans_u32.get_unchecked(idx) }
+            Self::transition_u32(&self.trans_u32, idx)
         }
     }
 
     #[inline(always)]
     pub fn next_eoi_state(&self, state: u32) -> u32 {
-        let idx = (state as usize) * self.class_count + self.eoi_class;
-        // SAFETY: state is bounded by state_count and eoi_class < class_count,
-        // both validated during CompactDfa construction. The transition table has
-        // exactly state_count * class_count entries.
+        let idx = self.transition_index(state, self.eoi_class);
         if let Some(trans) = &self.trans_u4 {
-            let val = unsafe { *trans.get_unchecked(idx / 2) };
-            if idx % 2 == 0 {
-                (val & 0x0F) as u32
-            } else {
-                (val >> 4) as u32
-            }
+            Self::transition_u4(trans, idx)
         } else if let Some(trans) = &self.trans_u8 {
-            unsafe { *trans.get_unchecked(idx) as u32 }
+            Self::transition_u8(trans, idx)
         } else {
-            unsafe { *self.trans_u32.get_unchecked(idx) }
+            Self::transition_u32(&self.trans_u32, idx)
         }
     }
 }
@@ -237,6 +240,21 @@ impl Drop for RegexDFA {
 }
 
 impl RegexDFA {
+    #[inline(always)]
+    fn byte_class(&self, byte: u8) -> usize {
+        let idx = usize::from(byte);
+        debug_assert!(idx < self.byte_classes.len());
+        // SAFETY: `byte` is always 0..=255 and validation is adjacent.
+        unsafe { *self.byte_classes.get_unchecked(idx) as usize }
+    }
+
+    #[inline(always)]
+    fn transition_table_entry(&self, idx: usize) -> u32 {
+        debug_assert!(idx < self.transition_table.len());
+        // SAFETY: bounds validation and unchecked access stay adjacent.
+        unsafe { *self.transition_table.get_unchecked(idx) }
+    }
+
     #[inline]
     pub(crate) fn state_count(&self) -> usize {
         self.transition_table.len() / self.class_count as usize
@@ -256,18 +274,12 @@ impl RegexDFA {
     pub(crate) fn transition_for_class(&self, state: u32, class_id: usize) -> u32 {
         let state_idx = (state & MASK_STATE) as usize;
         let idx = state_idx * self.class_count as usize + class_id;
-        // SAFETY: state_idx is bounded by MAX_DFA_STATES and class_id by class_count,
-        // both validated during DFA construction. The transition table has exactly
-        // num_states * class_count entries.
-        debug_assert!(idx < self.transition_table.len());
-        unsafe { *self.transition_table.get_unchecked(idx) }
+        self.transition_table_entry(idx)
     }
 
     #[inline(always)]
     pub(crate) fn transition_for_byte(&self, state: u32, byte: u8) -> u32 {
-        // byte_classes is exactly [u32; 256] — u8 index is always in bounds.
-        let class_id = unsafe { *self.byte_classes.get_unchecked(usize::from(byte)) } as usize;
-        self.transition_for_class(state, class_id)
+        self.transition_for_class(state, self.byte_class(byte))
     }
 
     #[inline(always)]

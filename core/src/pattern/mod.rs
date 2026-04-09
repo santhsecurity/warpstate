@@ -12,7 +12,7 @@ pub mod compiler;
 pub mod ir;
 
 pub use compiler::{literal_prefilter_hash, PatternSetBuilder};
-pub use ir::{CompiledPattern, CompiledPatternKind, PatternIR};
+pub use ir::{CompiledPatternKind, PatternIR};
 
 /// A thread-safe, lock-free updatable pattern set.
 pub struct HotSwapPatternSet {

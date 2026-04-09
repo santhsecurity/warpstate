@@ -74,11 +74,15 @@ fn main(
     @builtin(global_invocation_id) gid: vec3<u32>,
     @builtin(local_invocation_id) local_id: vec3<u32>,
 ) {
-    if local_id.x == 0u {
+    // Only the absolute first thread initializes status to OK to prevent
+    // a slow workgroup from overwriting an error set by an earlier workgroup.
+    if gid.x == 0u && gid.y == 0u {
         atomicStore(&match_count[2], STATUS_OK);
-        if uniforms.table_size > MAX_SMEM_ENTRIES {
-            atomicStore(&match_count[2], STATUS_TABLE_TOO_LARGE);
-        }
+    }
+    workgroupBarrier();
+    // Any thread in any workgroup can set error status (atomic, never overwritten by OK).
+    if uniforms.table_size > MAX_SMEM_ENTRIES {
+        atomicStore(&match_count[2], STATUS_TABLE_TOO_LARGE);
     }
     workgroupBarrier();
 

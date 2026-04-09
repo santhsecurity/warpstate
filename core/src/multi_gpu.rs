@@ -292,7 +292,7 @@ mod tests {
         let matcher = match pollster::block_on(MultiGpuMatcher::new(&patterns)) {
             Ok(matcher) => matcher,
             Err(Error::NoGpuAdapter) => return,
-            Err(other) => panic!("unexpected multi-GPU init error: {other:?}"),
+            Err(other) => panic!("multi-GPU init failed unexpectedly: {other:?}"),
         };
 
         assert!(matcher.device_count() >= 1);

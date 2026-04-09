@@ -1,3 +1,4 @@
+#![cfg(feature = "gpu")]
 //! LEGENDARY CORRECTNESS TESTS FOR WARPSTATE
 //!
 //! These tests treat warpstate as mission-critical infrastructure:
@@ -20,7 +21,7 @@ use warpstate::{Error, Match, PatternSet};
 fn legendary_cpu_gpu_parity_500_patterns_10_iterations() {
     use rand::Rng;
     use rand::SeedableRng;
-    use warpstate::gpu::GpuMatcher;
+    use warpstate::GpuMatcher;
 
     fn run_iteration(seed: u64) {
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
@@ -654,7 +655,7 @@ fn legendary_regression_unicode_multibyte_exact_positions() {
 #[cfg(feature = "gpu")]
 #[test]
 fn legendary_gpu_pattern_at_exact_chunk_boundary() {
-    use warpstate::gpu::GpuMatcher;
+    use warpstate::GpuMatcher;
 
     let ps = PatternSet::builder().literal("BOUNDARY").build().unwrap();
 
@@ -695,7 +696,7 @@ fn legendary_gpu_pattern_at_exact_chunk_boundary() {}
 #[test]
 #[ignore = "GPU buffer limit with 1000 patterns"]
 fn legendary_gpu_large_pattern_set_single_match() {
-    use warpstate::gpu::GpuMatcher;
+    use warpstate::GpuMatcher;
 
     let mut builder = PatternSet::builder();
 
@@ -729,7 +730,7 @@ fn legendary_gpu_large_pattern_set_single_match() {}
 #[cfg(feature = "gpu")]
 #[test]
 fn legendary_gpu_binary_alignment_edge_cases() {
-    use warpstate::gpu::GpuMatcher;
+    use warpstate::GpuMatcher;
 
     let ps = PatternSet::builder()
         .literal_bytes(b"\x00\x00\x00\x01") // H.264 start code-like

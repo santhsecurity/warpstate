@@ -1,3 +1,4 @@
+#![cfg(feature = "gpu")]
 //! Adversarial tests for warpstate GPU scan path
 //!
 //! These tests are designed to BREAK the GPU scanner by testing:
@@ -13,9 +14,9 @@
 use std::sync::Arc;
 
 use warpstate::batch::{scan_batch_gpu, ScanItem};
-use warpstate::gpu::GpuMatcher;
 use warpstate::persistent::PersistentMatcher;
-use warpstate::pipeline::StreamPipeline;
+use warpstate::GpuMatcher;
+use warpstate::StreamPipeline;
 use warpstate::{AutoMatcher, AutoMatcherConfig, Error, Matcher, PatternSet};
 
 /// Helper: Check if GPU is available by trying to create an AutoMatcher.

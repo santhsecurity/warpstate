@@ -9,7 +9,9 @@
 use crate::dma::DmaStagingBuffer;
 
 // Re-export vocabulary traits so existing `use crate::matcher::*` works.
-pub use matchkit::matcher::{BlockMatcher, BoxedMatcher, Matcher};
+pub use matchkit::matcher::BlockMatcher;
+#[cfg(feature = "gpu")]
+pub use matchkit::matcher::Matcher;
 
 /// Extension trait for backends that can scan directly from mapped staging buffers.
 #[cfg(feature = "gpu")]

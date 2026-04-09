@@ -279,6 +279,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let end_limit = min(uniforms.input_len, pos + 16777216u);
     var last_match_ptr: u32 = 0xFFFFFFFFu;
     var last_match_i: u32 = 0u;
+    var eoi_matched = false;
 
     for (var i = pos; i < end_limit; i = i + 1u) {{
         let word_idx = i >> 2u;
@@ -304,7 +305,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let eoi_state = transition_table[state_idx * uniforms.class_count + uniforms.eoi_class];
         if (eoi_state & FLAG_MATCH) != 0u {{
             last_match_ptr = match_list_pointers[eoi_state & MASK_STATE];
-            last_match_i = end_limit - 1u;
+            eoi_matched = true;
         }}
     }}
 
@@ -315,7 +316,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             if count < uniforms.max_matches {{
                 let pat_id = match_lists[last_match_ptr + 1u + m];
                 let pat_len = pattern_lengths[pat_id];
-                let end_pos = select(last_match_i + 1u, min(pos + pat_len, uniforms.input_len), pat_len != 0u);
+                let end_pos = select(select(last_match_i, end_limit, eoi_matched), min(pos + pat_len, uniforms.input_len), pat_len != 0u);
                 match_output[count] = vec4<u32>(pat_id, pos, end_pos, 0u);
             }} else {{
                 atomicStore(&match_count[1], 1u);
@@ -421,6 +422,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let end_limit = min(uniforms.input_len, pos + 16777216u);
     var last_match_ptr: u32 = 0xFFFFFFFFu;
     var last_match_i: u32 = 0u;
+    var eoi_matched = false;
 
     for (var i = pos; i < end_limit; i = i + 1u) {{
         let word_idx = i >> 2u;
@@ -446,7 +448,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         let eoi_state = TRANSITIONS[state_idx * CLASS_COUNT + EOI_CLASS];
         if (eoi_state & FLAG_MATCH) != 0u {{
             last_match_ptr = MATCH_PTRS[eoi_state & MASK_STATE];
-            last_match_i = end_limit - 1u;
+            eoi_matched = true;
         }}
     }}
 
@@ -457,7 +459,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
             if count < uniforms.max_matches {{
                 let pat_id = MATCH_LISTS[last_match_ptr + 1u + m];
                 let pat_len = PAT_LENGTHS[pat_id];
-                let end_pos = select(last_match_i + 1u, min(pos + pat_len, uniforms.input_len), pat_len != 0u);
+                let end_pos = select(select(last_match_i, end_limit, eoi_matched), min(pos + pat_len, uniforms.input_len), pat_len != 0u);
                 match_output[count] = vec4<u32>(pat_id, pos, end_pos, 0u);
             }} else {{
                 atomicStore(&match_count[1], 1u);

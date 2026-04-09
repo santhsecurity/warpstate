@@ -147,7 +147,10 @@ fn test_regex_0() {
 }
 #[test]
 fn test_regex_1() {
-    let patterns = PatternSet::builder().regex(r"eval\(").build().unwrap();
+    let patterns = PatternSet::builder()
+        .regex(r"eval\(")
+        .build()
+        .unwrap();
     let input = b"some js code eval(1+1);";
     let matches = patterns.scan(input).unwrap();
     assert_eq!(matches.len(), 1, "Regex 1 failed");
@@ -164,7 +167,10 @@ fn test_regex_2() {
 }
 #[test]
 fn test_regex_3() {
-    let patterns = PatternSet::builder().regex(r"<script.*?>").build().unwrap();
+    let patterns = PatternSet::builder()
+        .regex(r"<script.*?>")
+        .build()
+        .unwrap();
     let input = b"<html><script src='x.js'></script></html>";
     let matches = patterns.scan(input).unwrap();
     assert_eq!(matches.len(), 1, "Regex 3 failed");
@@ -191,7 +197,10 @@ fn test_regex_5() {
 }
 #[test]
 fn test_regex_6() {
-    let patterns = PatternSet::builder().regex(r"execxp").build().unwrap();
+    let patterns = PatternSet::builder()
+        .regex(r"execxp")
+        .build()
+        .unwrap();
     let input = b"call execxp_xp_cmdshell";
     let matches = patterns.scan(input).unwrap();
     assert_eq!(matches.len(), 1, "Regex 6 failed");
@@ -238,7 +247,10 @@ fn test_regex_10() {
 }
 #[test]
 fn test_regex_11() {
-    let patterns = PatternSet::builder().regex(r"chmod \+x").build().unwrap();
+    let patterns = PatternSet::builder()
+        .regex(r"chmod \+x")
+        .build()
+        .unwrap();
     let input = b"make executable chmod +x ./malware";
     let matches = patterns.scan(input).unwrap();
     assert_eq!(matches.len(), 1, "Regex 11 failed");
@@ -254,11 +266,7 @@ fn test_mixed_0() {
         .unwrap();
     let input = b"some literal_match_0 and regex_match_123 here";
     let matches = patterns.scan(input).unwrap();
-    assert_eq!(
-        matches.len(),
-        2,
-        "Should find 1 literal and 1 regex match for mixed 0"
-    );
+    assert_eq!(matches.len(), 2, "Should find 1 literal and 1 regex match for mixed 0");
 }
 #[test]
 fn test_mixed_1() {
@@ -269,11 +277,7 @@ fn test_mixed_1() {
         .unwrap();
     let input = b"some literal_match_1 and regex_match_123 here";
     let matches = patterns.scan(input).unwrap();
-    assert_eq!(
-        matches.len(),
-        2,
-        "Should find 1 literal and 1 regex match for mixed 1"
-    );
+    assert_eq!(matches.len(), 2, "Should find 1 literal and 1 regex match for mixed 1");
 }
 #[test]
 fn test_mixed_2() {
@@ -284,11 +288,7 @@ fn test_mixed_2() {
         .unwrap();
     let input = b"some literal_match_2 and regex_match_123 here";
     let matches = patterns.scan(input).unwrap();
-    assert_eq!(
-        matches.len(),
-        2,
-        "Should find 1 literal and 1 regex match for mixed 2"
-    );
+    assert_eq!(matches.len(), 2, "Should find 1 literal and 1 regex match for mixed 2");
 }
 #[test]
 fn test_mixed_3() {
@@ -299,11 +299,7 @@ fn test_mixed_3() {
         .unwrap();
     let input = b"some literal_match_3 and regex_match_123 here";
     let matches = patterns.scan(input).unwrap();
-    assert_eq!(
-        matches.len(),
-        2,
-        "Should find 1 literal and 1 regex match for mixed 3"
-    );
+    assert_eq!(matches.len(), 2, "Should find 1 literal and 1 regex match for mixed 3");
 }
 #[test]
 fn test_mixed_4() {
@@ -314,11 +310,7 @@ fn test_mixed_4() {
         .unwrap();
     let input = b"some literal_match_4 and regex_match_123 here";
     let matches = patterns.scan(input).unwrap();
-    assert_eq!(
-        matches.len(),
-        2,
-        "Should find 1 literal and 1 regex match for mixed 4"
-    );
+    assert_eq!(matches.len(), 2, "Should find 1 literal and 1 regex match for mixed 4");
 }
 #[test]
 fn test_mixed_5() {
@@ -329,11 +321,7 @@ fn test_mixed_5() {
         .unwrap();
     let input = b"some literal_match_5 and regex_match_123 here";
     let matches = patterns.scan(input).unwrap();
-    assert_eq!(
-        matches.len(),
-        2,
-        "Should find 1 literal and 1 regex match for mixed 5"
-    );
+    assert_eq!(matches.len(), 2, "Should find 1 literal and 1 regex match for mixed 5");
 }
 #[test]
 fn test_mixed_6() {
@@ -344,11 +332,7 @@ fn test_mixed_6() {
         .unwrap();
     let input = b"some literal_match_6 and regex_match_123 here";
     let matches = patterns.scan(input).unwrap();
-    assert_eq!(
-        matches.len(),
-        2,
-        "Should find 1 literal and 1 regex match for mixed 6"
-    );
+    assert_eq!(matches.len(), 2, "Should find 1 literal and 1 regex match for mixed 6");
 }
 #[test]
 fn test_mixed_7() {
@@ -359,11 +343,7 @@ fn test_mixed_7() {
         .unwrap();
     let input = b"some literal_match_7 and regex_match_123 here";
     let matches = patterns.scan(input).unwrap();
-    assert_eq!(
-        matches.len(),
-        2,
-        "Should find 1 literal and 1 regex match for mixed 7"
-    );
+    assert_eq!(matches.len(), 2, "Should find 1 literal and 1 regex match for mixed 7");
 }
 #[test]
 fn test_mixed_8() {
@@ -374,11 +354,7 @@ fn test_mixed_8() {
         .unwrap();
     let input = b"some literal_match_8 and regex_match_123 here";
     let matches = patterns.scan(input).unwrap();
-    assert_eq!(
-        matches.len(),
-        2,
-        "Should find 1 literal and 1 regex match for mixed 8"
-    );
+    assert_eq!(matches.len(), 2, "Should find 1 literal and 1 regex match for mixed 8");
 }
 #[test]
 fn test_mixed_9() {
@@ -389,11 +365,7 @@ fn test_mixed_9() {
         .unwrap();
     let input = b"some literal_match_9 and regex_match_123 here";
     let matches = patterns.scan(input).unwrap();
-    assert_eq!(
-        matches.len(),
-        2,
-        "Should find 1 literal and 1 regex match for mixed 9"
-    );
+    assert_eq!(matches.len(), 2, "Should find 1 literal and 1 regex match for mixed 9");
 }
 #[test]
 fn test_mixed_10() {
@@ -404,11 +376,7 @@ fn test_mixed_10() {
         .unwrap();
     let input = b"some literal_match_10 and regex_match_123 here";
     let matches = patterns.scan(input).unwrap();
-    assert_eq!(
-        matches.len(),
-        2,
-        "Should find 1 literal and 1 regex match for mixed 10"
-    );
+    assert_eq!(matches.len(), 2, "Should find 1 literal and 1 regex match for mixed 10");
 }
 #[test]
 fn test_mixed_11() {
@@ -419,94 +387,126 @@ fn test_mixed_11() {
         .unwrap();
     let input = b"some literal_match_11 and regex_match_123 here";
     let matches = patterns.scan(input).unwrap();
-    assert_eq!(
-        matches.len(),
-        2,
-        "Should find 1 literal and 1 regex match for mixed 11"
-    );
+    assert_eq!(matches.len(), 2, "Should find 1 literal and 1 regex match for mixed 11");
 }
 // --- Category 4: UNICODE PATTERNS ---
 
 #[test]
 fn test_unicode_0() {
-    let patterns = PatternSet::builder().literal("😀").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("😀")
+        .build()
+        .unwrap();
     let input = "hello 😀 world".as_bytes();
     let matches = patterns.scan(input).unwrap();
     assert_eq!(matches.len(), 1, "Should find 1 match for unicode emoji 0");
 }
 #[test]
 fn test_unicode_1() {
-    let patterns = PatternSet::builder().literal("🚀").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("🚀")
+        .build()
+        .unwrap();
     let input = "hello 🚀 world".as_bytes();
     let matches = patterns.scan(input).unwrap();
     assert_eq!(matches.len(), 1, "Should find 1 match for unicode emoji 1");
 }
 #[test]
 fn test_unicode_2() {
-    let patterns = PatternSet::builder().literal("🦀").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("🦀")
+        .build()
+        .unwrap();
     let input = "hello 🦀 world".as_bytes();
     let matches = patterns.scan(input).unwrap();
     assert_eq!(matches.len(), 1, "Should find 1 match for unicode emoji 2");
 }
 #[test]
 fn test_unicode_3() {
-    let patterns = PatternSet::builder().literal("🔥").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("🔥")
+        .build()
+        .unwrap();
     let input = "hello 🔥 world".as_bytes();
     let matches = patterns.scan(input).unwrap();
     assert_eq!(matches.len(), 1, "Should find 1 match for unicode emoji 3");
 }
 #[test]
 fn test_unicode_4() {
-    let patterns = PatternSet::builder().literal("🌍").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("🌍")
+        .build()
+        .unwrap();
     let input = "hello 🌍 world".as_bytes();
     let matches = patterns.scan(input).unwrap();
     assert_eq!(matches.len(), 1, "Should find 1 match for unicode emoji 4");
 }
 #[test]
 fn test_unicode_5() {
-    let patterns = PatternSet::builder().literal("🎉").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("🎉")
+        .build()
+        .unwrap();
     let input = "hello 🎉 world".as_bytes();
     let matches = patterns.scan(input).unwrap();
     assert_eq!(matches.len(), 1, "Should find 1 match for unicode emoji 5");
 }
 #[test]
 fn test_unicode_6() {
-    let patterns = PatternSet::builder().literal("💡").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("💡")
+        .build()
+        .unwrap();
     let input = "hello 💡 world".as_bytes();
     let matches = patterns.scan(input).unwrap();
     assert_eq!(matches.len(), 1, "Should find 1 match for unicode emoji 6");
 }
 #[test]
 fn test_unicode_7() {
-    let patterns = PatternSet::builder().literal("🛡️").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("🛡️")
+        .build()
+        .unwrap();
     let input = "hello 🛡️ world".as_bytes();
     let matches = patterns.scan(input).unwrap();
     assert_eq!(matches.len(), 1, "Should find 1 match for unicode emoji 7");
 }
 #[test]
 fn test_unicode_8() {
-    let patterns = PatternSet::builder().literal("💻").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("💻")
+        .build()
+        .unwrap();
     let input = "hello 💻 world".as_bytes();
     let matches = patterns.scan(input).unwrap();
     assert_eq!(matches.len(), 1, "Should find 1 match for unicode emoji 8");
 }
 #[test]
 fn test_unicode_9() {
-    let patterns = PatternSet::builder().literal("🧠").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("🧠")
+        .build()
+        .unwrap();
     let input = "hello 🧠 world".as_bytes();
     let matches = patterns.scan(input).unwrap();
     assert_eq!(matches.len(), 1, "Should find 1 match for unicode emoji 9");
 }
 #[test]
 fn test_unicode_10() {
-    let patterns = PatternSet::builder().literal("✨").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("✨")
+        .build()
+        .unwrap();
     let input = "hello ✨ world".as_bytes();
     let matches = patterns.scan(input).unwrap();
     assert_eq!(matches.len(), 1, "Should find 1 match for unicode emoji 10");
 }
 #[test]
 fn test_unicode_11() {
-    let patterns = PatternSet::builder().literal("🔑").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("🔑")
+        .build()
+        .unwrap();
     let input = "hello 🔑 world".as_bytes();
     let matches = patterns.scan(input).unwrap();
     assert_eq!(matches.len(), 1, "Should find 1 match for unicode emoji 11");
@@ -528,10 +528,7 @@ fn test_overlapping_0() {
     // Aho-Corasick normally matches 'overlap' and 'verla'.
     // And regex o.*p matches 'overlap'.
     // So there should be at least 2 matches (or more, depending on overlapping config)
-    assert!(
-        matches.len() >= 2,
-        "Should find multiple overlapping matches for overlap 0"
-    );
+    assert!(matches.len() >= 2, "Should find multiple overlapping matches for overlap 0");
 }
 #[test]
 fn test_overlapping_1() {
@@ -548,10 +545,7 @@ fn test_overlapping_1() {
     // Aho-Corasick normally matches 'overlap' and 'verla'.
     // And regex o.*p matches 'overlap'.
     // So there should be at least 2 matches (or more, depending on overlapping config)
-    assert!(
-        matches.len() >= 2,
-        "Should find multiple overlapping matches for overlap 1"
-    );
+    assert!(matches.len() >= 2, "Should find multiple overlapping matches for overlap 1");
 }
 #[test]
 fn test_overlapping_2() {
@@ -568,10 +562,7 @@ fn test_overlapping_2() {
     // Aho-Corasick normally matches 'overlap' and 'verla'.
     // And regex o.*p matches 'overlap'.
     // So there should be at least 2 matches (or more, depending on overlapping config)
-    assert!(
-        matches.len() >= 2,
-        "Should find multiple overlapping matches for overlap 2"
-    );
+    assert!(matches.len() >= 2, "Should find multiple overlapping matches for overlap 2");
 }
 #[test]
 fn test_overlapping_3() {
@@ -588,10 +579,7 @@ fn test_overlapping_3() {
     // Aho-Corasick normally matches 'overlap' and 'verla'.
     // And regex o.*p matches 'overlap'.
     // So there should be at least 2 matches (or more, depending on overlapping config)
-    assert!(
-        matches.len() >= 2,
-        "Should find multiple overlapping matches for overlap 3"
-    );
+    assert!(matches.len() >= 2, "Should find multiple overlapping matches for overlap 3");
 }
 #[test]
 fn test_overlapping_4() {
@@ -608,10 +596,7 @@ fn test_overlapping_4() {
     // Aho-Corasick normally matches 'overlap' and 'verla'.
     // And regex o.*p matches 'overlap'.
     // So there should be at least 2 matches (or more, depending on overlapping config)
-    assert!(
-        matches.len() >= 2,
-        "Should find multiple overlapping matches for overlap 4"
-    );
+    assert!(matches.len() >= 2, "Should find multiple overlapping matches for overlap 4");
 }
 #[test]
 fn test_overlapping_5() {
@@ -628,10 +613,7 @@ fn test_overlapping_5() {
     // Aho-Corasick normally matches 'overlap' and 'verla'.
     // And regex o.*p matches 'overlap'.
     // So there should be at least 2 matches (or more, depending on overlapping config)
-    assert!(
-        matches.len() >= 2,
-        "Should find multiple overlapping matches for overlap 5"
-    );
+    assert!(matches.len() >= 2, "Should find multiple overlapping matches for overlap 5");
 }
 #[test]
 fn test_overlapping_6() {
@@ -648,10 +630,7 @@ fn test_overlapping_6() {
     // Aho-Corasick normally matches 'overlap' and 'verla'.
     // And regex o.*p matches 'overlap'.
     // So there should be at least 2 matches (or more, depending on overlapping config)
-    assert!(
-        matches.len() >= 2,
-        "Should find multiple overlapping matches for overlap 6"
-    );
+    assert!(matches.len() >= 2, "Should find multiple overlapping matches for overlap 6");
 }
 #[test]
 fn test_overlapping_7() {
@@ -668,10 +647,7 @@ fn test_overlapping_7() {
     // Aho-Corasick normally matches 'overlap' and 'verla'.
     // And regex o.*p matches 'overlap'.
     // So there should be at least 2 matches (or more, depending on overlapping config)
-    assert!(
-        matches.len() >= 2,
-        "Should find multiple overlapping matches for overlap 7"
-    );
+    assert!(matches.len() >= 2, "Should find multiple overlapping matches for overlap 7");
 }
 #[test]
 fn test_overlapping_8() {
@@ -688,10 +664,7 @@ fn test_overlapping_8() {
     // Aho-Corasick normally matches 'overlap' and 'verla'.
     // And regex o.*p matches 'overlap'.
     // So there should be at least 2 matches (or more, depending on overlapping config)
-    assert!(
-        matches.len() >= 2,
-        "Should find multiple overlapping matches for overlap 8"
-    );
+    assert!(matches.len() >= 2, "Should find multiple overlapping matches for overlap 8");
 }
 #[test]
 fn test_overlapping_9() {
@@ -708,10 +681,7 @@ fn test_overlapping_9() {
     // Aho-Corasick normally matches 'overlap' and 'verla'.
     // And regex o.*p matches 'overlap'.
     // So there should be at least 2 matches (or more, depending on overlapping config)
-    assert!(
-        matches.len() >= 2,
-        "Should find multiple overlapping matches for overlap 9"
-    );
+    assert!(matches.len() >= 2, "Should find multiple overlapping matches for overlap 9");
 }
 #[test]
 fn test_overlapping_10() {
@@ -728,10 +698,7 @@ fn test_overlapping_10() {
     // Aho-Corasick normally matches 'overlap' and 'verla'.
     // And regex o.*p matches 'overlap'.
     // So there should be at least 2 matches (or more, depending on overlapping config)
-    assert!(
-        matches.len() >= 2,
-        "Should find multiple overlapping matches for overlap 10"
-    );
+    assert!(matches.len() >= 2, "Should find multiple overlapping matches for overlap 10");
 }
 #[test]
 fn test_overlapping_11() {
@@ -748,10 +715,7 @@ fn test_overlapping_11() {
     // Aho-Corasick normally matches 'overlap' and 'verla'.
     // And regex o.*p matches 'overlap'.
     // So there should be at least 2 matches (or more, depending on overlapping config)
-    assert!(
-        matches.len() >= 2,
-        "Should find multiple overlapping matches for overlap 11"
-    );
+    assert!(matches.len() >= 2, "Should find multiple overlapping matches for overlap 11");
 }
 // --- Category 6: PERFORMANCE ---
 
@@ -765,14 +729,10 @@ fn test_performance_0() {
     let mut input = vec![b'x'; 1_000_000]; // 1MB input
     let target = format!("perf_literal_42").into_bytes();
     // inject a match
-    input[500_000..500_000 + target.len()].copy_from_slice(&target);
-
+    input[500_000..500_000+target.len()].copy_from_slice(&target);
+    
     let matches = patterns.scan(&input).unwrap();
-    assert_eq!(
-        matches.len(),
-        1,
-        "Should find exactly 1 match in 1MB for performance 0"
-    );
+    assert_eq!(matches.len(), 1, "Should find exactly 1 match in 1MB for performance 0");
 }
 #[test]
 fn test_performance_1() {
@@ -784,14 +744,10 @@ fn test_performance_1() {
     let mut input = vec![b'x'; 1_000_000]; // 1MB input
     let target = format!("perf_literal_42").into_bytes();
     // inject a match
-    input[500_000..500_000 + target.len()].copy_from_slice(&target);
-
+    input[500_000..500_000+target.len()].copy_from_slice(&target);
+    
     let matches = patterns.scan(&input).unwrap();
-    assert_eq!(
-        matches.len(),
-        1,
-        "Should find exactly 1 match in 1MB for performance 1"
-    );
+    assert_eq!(matches.len(), 1, "Should find exactly 1 match in 1MB for performance 1");
 }
 #[test]
 fn test_performance_2() {
@@ -803,14 +759,10 @@ fn test_performance_2() {
     let mut input = vec![b'x'; 1_000_000]; // 1MB input
     let target = format!("perf_literal_42").into_bytes();
     // inject a match
-    input[500_000..500_000 + target.len()].copy_from_slice(&target);
-
+    input[500_000..500_000+target.len()].copy_from_slice(&target);
+    
     let matches = patterns.scan(&input).unwrap();
-    assert_eq!(
-        matches.len(),
-        1,
-        "Should find exactly 1 match in 1MB for performance 2"
-    );
+    assert_eq!(matches.len(), 1, "Should find exactly 1 match in 1MB for performance 2");
 }
 #[test]
 fn test_performance_3() {
@@ -822,14 +774,10 @@ fn test_performance_3() {
     let mut input = vec![b'x'; 1_000_000]; // 1MB input
     let target = format!("perf_literal_42").into_bytes();
     // inject a match
-    input[500_000..500_000 + target.len()].copy_from_slice(&target);
-
+    input[500_000..500_000+target.len()].copy_from_slice(&target);
+    
     let matches = patterns.scan(&input).unwrap();
-    assert_eq!(
-        matches.len(),
-        1,
-        "Should find exactly 1 match in 1MB for performance 3"
-    );
+    assert_eq!(matches.len(), 1, "Should find exactly 1 match in 1MB for performance 3");
 }
 #[test]
 fn test_performance_4() {
@@ -841,14 +789,10 @@ fn test_performance_4() {
     let mut input = vec![b'x'; 1_000_000]; // 1MB input
     let target = format!("perf_literal_42").into_bytes();
     // inject a match
-    input[500_000..500_000 + target.len()].copy_from_slice(&target);
-
+    input[500_000..500_000+target.len()].copy_from_slice(&target);
+    
     let matches = patterns.scan(&input).unwrap();
-    assert_eq!(
-        matches.len(),
-        1,
-        "Should find exactly 1 match in 1MB for performance 4"
-    );
+    assert_eq!(matches.len(), 1, "Should find exactly 1 match in 1MB for performance 4");
 }
 #[test]
 fn test_performance_5() {
@@ -860,31 +804,35 @@ fn test_performance_5() {
     let mut input = vec![b'x'; 1_000_000]; // 1MB input
     let target = format!("perf_literal_42").into_bytes();
     // inject a match
-    input[500_000..500_000 + target.len()].copy_from_slice(&target);
-
+    input[500_000..500_000+target.len()].copy_from_slice(&target);
+    
     let matches = patterns.scan(&input).unwrap();
-    assert_eq!(
-        matches.len(),
-        1,
-        "Should find exactly 1 match in 1MB for performance 5"
-    );
+    assert_eq!(matches.len(), 1, "Should find exactly 1 match in 1MB for performance 5");
 }
 // --- Category 7: EDGE CASES ---
 
 #[test]
 fn test_edge_case_0_empty_input() {
-    let patterns = PatternSet::builder().literal("pattern").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("pattern")
+        .build()
+        .unwrap();
     let matches = patterns.scan(b"").unwrap();
     assert_eq!(matches.len(), 0, "Edge case empty_input failed");
 }
 #[test]
 fn test_edge_case_1_empty_pattern() {
-    let res = PatternSet::builder().literal("").build();
+    let res = PatternSet::builder()
+        .literal("")
+        .build();
     assert!(res.is_err(), "Empty pattern should return error");
 }
 #[test]
 fn test_edge_case_2_one_byte_input() {
-    let patterns = PatternSet::builder().literal("a").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("a")
+        .build()
+        .unwrap();
     let matches = patterns.scan(b"a").unwrap();
     assert_eq!(matches.len(), 1, "Edge case one_byte_input failed");
 }
@@ -895,15 +843,14 @@ fn test_edge_case_3_pattern_longer_than_input() {
         .build()
         .unwrap();
     let matches = patterns.scan(b"long").unwrap();
-    assert_eq!(
-        matches.len(),
-        0,
-        "Edge case pattern_longer_than_input failed"
-    );
+    assert_eq!(matches.len(), 0, "Edge case pattern_longer_than_input failed");
 }
 #[test]
 fn test_edge_case_4_null_bytes_in_input() {
-    let patterns = PatternSet::builder().literal("a").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("a")
+        .build()
+        .unwrap();
     let matches = patterns.scan(b"\x00a\x00").unwrap();
     assert_eq!(matches.len(), 1, "Edge case null_bytes_in_input failed");
 }
@@ -918,25 +865,37 @@ fn test_edge_case_5_null_byte_pattern() {
 }
 #[test]
 fn test_edge_case_6_regex_empty_input() {
-    let patterns = PatternSet::builder().regex("a*").build().unwrap();
+    let patterns = PatternSet::builder()
+        .regex("a*")
+        .build()
+        .unwrap();
     let matches = patterns.scan(b"").unwrap();
     assert_eq!(matches.len(), 1, "Edge case regex_empty_input failed");
 }
 #[test]
 fn test_edge_case_7_regex_all_nulls() {
-    let patterns = PatternSet::builder().regex("a+").build().unwrap();
+    let patterns = PatternSet::builder()
+        .regex("a+")
+        .build()
+        .unwrap();
     let matches = patterns.scan(b"\x00\x00\x00").unwrap();
     assert_eq!(matches.len(), 0, "Edge case regex_all_nulls failed");
 }
 #[test]
 fn test_edge_case_8_literal_all_nulls_input() {
-    let patterns = PatternSet::builder().literal("a").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("a")
+        .build()
+        .unwrap();
     let matches = patterns.scan(b"\x00\x00\x00").unwrap();
     assert_eq!(matches.len(), 0, "Edge case literal_all_nulls_input failed");
 }
 #[test]
 fn test_edge_case_9_unicode_cut_off() {
-    let patterns = PatternSet::builder().literal("🔥").build().unwrap();
+    let patterns = PatternSet::builder()
+        .literal("🔥")
+        .build()
+        .unwrap();
     let matches = patterns.scan(b"\xF0\x9F\x94").unwrap();
     assert_eq!(matches.len(), 0, "Edge case unicode_cut_off failed");
 }

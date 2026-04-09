@@ -20,7 +20,11 @@ impl GpuBufferPool {
         size: u64,
         usage: wgpu::BufferUsages,
     ) -> wgpu::Buffer {
-        let size_class = (size as usize).next_power_of_two().max(64) as u64;
+        let size_usize = size as usize;
+        let size_class = size_usize
+            .checked_next_power_of_two()
+            .unwrap_or(size_usize)
+            .max(64) as u64;
 
         {
             let mut pool = self
@@ -163,13 +167,21 @@ pub(crate) async fn acquire_device() -> Result<SharedDeviceQueue> {
     Ok(Arc::new((device, queue)))
 }
 
+pub(crate) const READBACK_SENTINEL: u8 = 0xDE;
+
 pub(crate) fn readback_buffer(device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         size,
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    })
+        mapped_at_creation: true,
+    });
+    {
+        let mut view = buf.slice(..).get_mapped_range_mut();
+        view.fill(READBACK_SENTINEL);
+    }
+    buf.unmap();
+    buf
 }
 
 pub(crate) fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {

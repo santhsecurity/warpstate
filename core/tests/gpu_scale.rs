@@ -1,3 +1,4 @@
+#![cfg(feature = "gpu")]
 //! GPU scale test — Large pattern set parity verification
 //!
 //! These tests verify that GPU and CPU backends produce IDENTICAL match sets
@@ -9,7 +10,7 @@
 use std::collections::HashSet;
 use std::time::Instant;
 
-use warpstate::gpu::GpuMatcher;
+use warpstate::GpuMatcher;
 use warpstate::PatternSet;
 
 /// Helper: Block on an async future (synchronous test context).

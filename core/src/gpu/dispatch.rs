@@ -198,7 +198,7 @@ pub(crate) async fn scan_literal_chunk(
         ],
     });
 
-    let workgroups = input_len.div_ceil(shader::WORKGROUP_SIZE);
+    let workgroups = compute_workgroups(device, input_len)?;
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("warpstate literal encoder"),
     });
@@ -317,6 +317,21 @@ pub(crate) async fn scan_literal_chunk(
     result
 }
 
+/// Compute the number of workgroups needed for an input, enforcing GPU limits.
+pub(crate) fn compute_workgroups(device: &wgpu::Device, input_len: u32) -> Result<u32> {
+    let raw = input_len.div_ceil(shader::WORKGROUP_SIZE);
+    let max = device.limits().max_compute_workgroups_per_dimension;
+    if raw > max {
+        return Err(Error::GpuDeviceError {
+            reason: format!(
+                "input requires {raw} workgroups, exceeding device limit {max}. \
+                 Fix: reduce chunk size or max input size."
+            ),
+        });
+    }
+    Ok(raw)
+}
+
 pub(crate) async fn scan_regex_chunk(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -387,7 +402,7 @@ pub(crate) async fn scan_regex_chunk(
         ],
     });
 
-    let workgroups = input_len.div_ceil(shader::WORKGROUP_SIZE);
+    let workgroups = compute_workgroups(device, input_len)?;
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("warpstate regex encoder"),
     });
@@ -479,7 +494,7 @@ pub(crate) async fn scan_specialized_regex_chunk(
         ],
     });
 
-    let workgroups = input_len.div_ceil(shader::WORKGROUP_SIZE);
+    let workgroups = compute_workgroups(device, input_len)?;
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("warpstate specialized regex encoder"),
     });

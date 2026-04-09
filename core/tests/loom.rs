@@ -1,3 +1,4 @@
+#![cfg(feature = "gpu")]
 //! Loom Testing Documentation
 //!
 //! Warpstate utilizes shared mutable state during multiple concurrent scans on the same engine.

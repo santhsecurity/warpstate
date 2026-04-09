@@ -9,11 +9,10 @@ use crate::hash_scan::HashScanner;
 use crate::pattern::PatternIR;
 use crate::Match;
 
+/// CPU-based scanning implementations.
 pub mod scan;
 
-pub use self::scan::{
-    scan, scan_aho_corasick, scan_aho_corasick_overlapping, scan_count, scan_overlapping, scan_with,
-};
+pub use self::scan::{scan, scan_aho_corasick, scan_count, scan_overlapping, scan_with};
 
 /// Maximum input size the CPU backend supports.
 ///
@@ -473,7 +472,7 @@ mod tests {
 
 #[cfg(test)]
 mod p0_tests {
-    use super::*;
+
     use crate::PatternSet;
 
     #[test]

@@ -152,7 +152,10 @@ impl RegexDFA {
                     } else {
                         compiled.next_state(state, sample_bytes[c as usize])
                     };
-                    let next_idx = compact_state_to_idx[&next];
+                    let next_idx = match compact_state_to_idx.get(&next) {
+                        Some(&idx) => idx,
+                        None => 0, // Dead state — treat as state 0 (start/reject)
+                    };
                     let trans_idx = i * class_count as usize + c as usize;
                     trans_u32[trans_idx] = next_idx;
                     if let Some(t8) = &mut trans_u8 {

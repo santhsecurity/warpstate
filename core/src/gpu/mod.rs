@@ -11,6 +11,7 @@ mod tests;
 use crate::config::AutoMatcherConfig;
 use crate::error::{Error, Result};
 use crate::pattern::PatternSet;
+use crate::shader;
 use crate::Match;
 
 use self::builder::{build_literal_gpu, build_regex_gpu, build_specialized_regex_gpu};
@@ -116,7 +117,17 @@ impl GpuMatcher {
     ) -> Result<Self> {
         let limits = device.limits();
         let max_storage = limits.max_storage_buffer_binding_size as usize;
-        let effective_max_input = config.configured_gpu_max_input_size().min(max_storage);
+        let max_buffer = limits.max_buffer_size as usize;
+        let max_workgroups = limits.max_compute_workgroups_per_dimension as usize;
+        let max_input_for_workgroups =
+            max_workgroups.saturating_mul(shader::WORKGROUP_SIZE as usize);
+        let hard_u32_limit = u32::MAX as usize;
+        let effective_max_input = config
+            .configured_gpu_max_input_size()
+            .min(max_storage)
+            .min(max_buffer)
+            .min(max_input_for_workgroups)
+            .min(hard_u32_limit);
         let effective_chunk = config
             .configured_chunk_size()
             .max(1)
@@ -299,9 +310,10 @@ impl GpuMatcher {
 }
 
 pub(crate) fn to_u32_len(len: usize, max_bytes: usize) -> Result<u32> {
+    let hard_limit = u32::MAX as usize;
     len.try_into().map_err(|_| Error::InputTooLarge {
         bytes: len,
-        max_bytes,
+        max_bytes: max_bytes.min(hard_limit),
     })
 }
 

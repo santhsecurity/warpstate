@@ -1,11 +1,9 @@
 use regex_automata::dfa::{dense, Automaton};
 use regex_automata::{Anchored, Input};
 
-use super::{RegexDFA, FLAG_DEAD, FLAG_MATCH, MASK_STATE, MAX_SCAN_MATCHES};
+use super::{RegexDFA, MASK_STATE, MAX_SCAN_MATCHES};
 use crate::error::{Error, Result};
 use crate::Match;
-#[cfg(feature = "jit")]
-use dfajit;
 
 impl RegexDFA {
     /// Collect matches at a DFA state. Cold path - errors are rare.
@@ -100,20 +98,6 @@ impl RegexDFA {
             // Process byte 0
             state = self.transition_for_byte(state, haystack[pos]);
 
-            // Prefetch next state's transition row into L1 cache
-            #[cfg(target_arch = "x86_64")]
-            {
-                let next_row = (state & super::MASK_STATE) as usize * self.class_count as usize;
-                if next_row < self.transition_table.len() {
-                    unsafe {
-                        core::arch::x86_64::_mm_prefetch(
-                            self.transition_table.as_ptr().add(next_row).cast::<i8>(),
-                            core::arch::x86_64::_MM_HINT_T0,
-                        );
-                    }
-                }
-            }
-
             let end0 = abs_off + pos as u64 + 1;
             if Self::is_match_state(state) {
                 self.collect_fixed_length_matches_at(state, end0, matches, max)?;
@@ -132,20 +116,6 @@ impl RegexDFA {
 
             // Process byte 1
             state = self.transition_for_byte(state, haystack[pos]);
-
-            // Prefetch
-            #[cfg(target_arch = "x86_64")]
-            {
-                let next_row = (state & super::MASK_STATE) as usize * self.class_count as usize;
-                if next_row < self.transition_table.len() {
-                    unsafe {
-                        core::arch::x86_64::_mm_prefetch(
-                            self.transition_table.as_ptr().add(next_row).cast::<i8>(),
-                            core::arch::x86_64::_MM_HINT_T0,
-                        );
-                    }
-                }
-            }
 
             let end1 = abs_off + pos as u64 + 1;
             if Self::is_match_state(state) {
@@ -167,22 +137,6 @@ impl RegexDFA {
         // Handle remaining byte
         while pos < len {
             state = self.transition_for_byte(state, haystack[pos]);
-
-            // Prefetch next state's transition row into L1 cache while we
-            // check match/dead flags. Hides memory latency for large DFAs
-            // (100K states × 256 classes = 100MB table that thrashes L2).
-            #[cfg(target_arch = "x86_64")]
-            {
-                let next_row = (state & super::MASK_STATE) as usize * self.class_count as usize;
-                if next_row < self.transition_table.len() {
-                    unsafe {
-                        core::arch::x86_64::_mm_prefetch(
-                            self.transition_table.as_ptr().add(next_row).cast::<i8>(),
-                            core::arch::x86_64::_MM_HINT_T0,
-                        );
-                    }
-                }
-            }
 
             let end = abs_off + pos as u64 + 1;
 
@@ -232,122 +186,22 @@ impl RegexDFA {
     /// reached.
     #[inline]
     pub fn scan(&self, haystack: &[u8], out_matches: &mut [Match]) -> Result<usize> {
-        #[cfg(feature = "jit")]
-        if let Some(jit) = &self.jit_dfa {
-            let count = dfajit::JitDfa::scan(jit.as_ref(), haystack, out_matches);
-            if count >= out_matches.len() {
-                return Err(Error::MatchBufferOverflow {
-                    count,
-                    max: out_matches.len(),
-                });
-            }
-            return Ok(count);
-        }
         self.scan_without_jit(haystack, out_matches)
-    }
-
-    /// Cold path for transition table bounds check failure.
-    #[cold]
-    #[allow(clippy::unused_self)]
-    fn transition_oob_cold(&self) -> Error {
-        Error::PatternCompilationFailed {
-            reason: "transition table out of bounds. Fix: rebuild the compiled pattern set."
-                .to_string(),
-        }
     }
 
     /// Interpreted DFA scan used when JIT is unavailable or for parity testing.
     #[inline]
     pub fn scan_without_jit(&self, haystack: &[u8], out_matches: &mut [Match]) -> Result<usize> {
-        let mut matches = Vec::with_capacity(32);
-        let class_count = self.class_count as usize;
-        let eoi_class = self.eoi_class as usize;
-
-        let mut state = self.start_state;
-        let mut match_start: u64 = 0;
-
-        // Check if the start state itself is an accept state (e.g. `^` anchors).
-        if (state & FLAG_MATCH) != 0 {
-            self.collect_matches_at(state, 0, 0, &mut matches, MAX_SCAN_MATCHES)?;
-        }
-
-        for (pos, &byte) in haystack.iter().enumerate() {
-            let class_id = self.byte_classes[usize::from(byte)] as usize;
-            let state_idx = (state & MASK_STATE) as usize;
-            let trans_idx = state_idx * class_count + class_id;
-            // Bounds check - cold path
-            if trans_idx >= self.transition_table.len() {
-                return Err(self.transition_oob_cold());
+        let mut count = 0usize;
+        self.scan_native_without_jit_with(haystack, &mut |matched| {
+            if count >= out_matches.len() {
+                false
+            } else {
+                out_matches[count] = matched;
+                count += 1;
+                true
             }
-            // SAFETY: trans_idx is bounds-checked on line 273.
-            state = unsafe { *self.transition_table.get_unchecked(trans_idx) };
-
-            if (state & FLAG_MATCH) != 0 {
-                self.collect_matches_at(
-                    state,
-                    match_start,
-                    (pos as u64) + 1,
-                    &mut matches,
-                    MAX_SCAN_MATCHES,
-                )?;
-            }
-
-            if (state & FLAG_DEAD) != 0 {
-                // Dead state reached. Reset to start state, but we need to
-                state = self.start_state;
-                match_start = pos as u64;
-
-                // Re-evaluate the current byte from the start state.
-                let class_id2 = self.byte_classes[usize::from(byte)] as usize;
-                let state_idx2 = (state & MASK_STATE) as usize;
-                let trans_idx2 = state_idx2 * class_count + class_id2;
-                if trans_idx2 >= self.transition_table.len() {
-                    return Err(self.transition_oob_cold());
-                }
-                // SAFETY: trans_idx2 is bounds-checked on line 297.
-                state = unsafe { *self.transition_table.get_unchecked(trans_idx2) };
-
-                if (state & FLAG_MATCH) != 0 {
-                    self.collect_matches_at(
-                        state,
-                        match_start,
-                        (pos as u64) + 1,
-                        &mut matches,
-                        MAX_SCAN_MATCHES,
-                    )?;
-                }
-
-                if (state & FLAG_DEAD) != 0 {
-                    state = self.start_state;
-                    match_start = (pos as u64) + 1;
-                }
-            }
-        }
-
-        // Final EOI transition for patterns anchored to end of input.
-        if (state & FLAG_DEAD) == 0 {
-            let state_idx = (state & MASK_STATE) as usize;
-            let eoi_trans_idx = state_idx * class_count + eoi_class;
-            if eoi_trans_idx >= self.transition_table.len() {
-                return Err(self.transition_oob_cold());
-            }
-            // SAFETY: eoi_trans_idx is bounds-checked on line 323.
-            let eoi_state = unsafe { *self.transition_table.get_unchecked(eoi_trans_idx) };
-            if (eoi_state & FLAG_MATCH) != 0 {
-                self.collect_matches_at(
-                    eoi_state,
-                    match_start,
-                    haystack.len() as u64,
-                    &mut matches,
-                    MAX_SCAN_MATCHES,
-                )?;
-            }
-        }
-
-        let count = matches.len().min(out_matches.len());
-        for i in 0..count {
-            out_matches[i] = matches[i];
-        }
+        })?;
         Ok(count)
     }
 

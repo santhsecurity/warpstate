@@ -365,7 +365,7 @@ mod tests {
         match pollster::block_on(PersistentMatcher::new(patterns)) {
             Ok(matcher) => Some(matcher),
             Err(Error::NoGpuAdapter) => None,
-            Err(error) => panic!("unexpected persistent matcher init error: {error:?}"),
+            Err(error) => panic!("persistent matcher init failed unexpectedly: {error:?}"),
         }
     }
 

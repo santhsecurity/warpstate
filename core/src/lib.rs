@@ -25,6 +25,7 @@
 //!
 //! ```rust,no_run
 //! # async fn example() {
+//! # #[cfg(feature = "gpu")] {
 //! use warpstate::{PatternSet, GpuMatcher};
 //!
 //! let patterns = PatternSet::builder()
@@ -36,6 +37,7 @@
 //! // GPU scan (10-100x faster on large inputs with many patterns)
 //! let gpu = GpuMatcher::new(&patterns).await.unwrap();
 //! let matches = gpu.scan(b"the password is secret_key").await.unwrap();
+//! # }
 //! # }
 //! ```
 //!
@@ -72,7 +74,13 @@
 #![cfg_attr(not(feature = "gpu"), deny(unsafe_code))]
 #![cfg_attr(
     not(test),
-    deny(clippy::unwrap_used, clippy::todo, clippy::unimplemented)
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::expect_used,
+        clippy::panic
+    )
 )]
 // Performance-critical matching engine: pedantic lints are reviewed and selectively allowed.
 #![allow(
@@ -93,69 +101,65 @@
     clippy::too_many_lines,
     clippy::explicit_counter_loop,
     clippy::match_same_arms,
-    clippy::expect_used,
     clippy::module_name_repetitions,
     clippy::manual_let_else,
     clippy::manual_slice_size_calculation,
     clippy::unused_self,
     clippy::needless_pass_by_value,
-    clippy::panic,
     clippy::redundant_closure_for_method_calls,
     clippy::manual_memcpy,
-    dead_code,
-    unused_imports,
-    missing_docs
+    dead_code
 )]
 
 pub mod batch;
 pub mod compiled_index;
-pub mod config;
-pub mod cpu;
-pub mod dfa;
-pub mod error;
+pub(crate) mod config;
+pub(crate) mod cpu;
+pub(crate) mod dfa;
+pub(crate) mod error;
 #[cfg(feature = "fused")]
-pub mod fused;
+pub(crate) mod fused;
 #[cfg(feature = "gpu")]
 pub mod gpu;
-pub mod gpu_scanner;
-pub mod hash_scan;
+pub(crate) mod gpu_scanner;
+pub(crate) mod hash_scan;
 mod literal_prefilter;
-pub mod pattern;
-pub mod router;
-pub mod scanner;
+pub(crate) mod pattern;
+pub(crate) mod router;
+pub(crate) mod scanner;
 #[cfg(feature = "gpu")]
-pub mod shader;
-pub mod specialize;
+pub(crate) mod shader;
+pub(crate) mod specialize;
 
 // Production modules wired in
 #[cfg(feature = "gpu")]
-pub mod algebraic;
+pub(crate) mod algebraic;
 #[cfg(feature = "gpu")]
-pub mod dma;
+pub(crate) mod dma;
 /// DFA traversal on the GPU (deprecated — use persistent, smem, or algebraic).
 #[cfg(feature = "gpu")]
 #[allow(deprecated)]
-pub mod gpu_dfa;
+pub(crate) mod gpu_dfa;
 #[cfg(feature = "gpu")]
 pub mod gpu_smem;
 /// Trait definition for pattern matching backends.
-pub mod matcher;
+pub(crate) mod matcher;
 #[cfg(feature = "gpu")]
-pub mod multi_gpu;
+pub(crate) mod multi_gpu;
 #[cfg(feature = "gpu")]
-pub mod persistent;
-pub mod pipeline;
+pub(crate) mod persistent;
+pub(crate) mod pipeline;
 #[cfg(feature = "gpu")]
-pub mod rolling_hash;
+pub(crate) mod rolling_hash;
 #[cfg(feature = "gpu")]
-pub mod shader_hash;
+pub(crate) mod shader_hash;
 #[cfg(feature = "gpu")]
-pub mod shader_smem;
-pub mod stream;
+pub(crate) mod shader_smem;
+pub(crate) mod stream;
 
 pub use compiled_index::CompiledPatternIndex;
 pub use config::{AutoMatcherConfig, DEFAULT_GPU_THRESHOLD, DEFAULT_MAX_MATCHES};
-pub use cpu::{scan_aho_corasick, scan_count, scan_with, CachedScanner};
+pub use cpu::{scan, scan_aho_corasick, scan_count, scan_with, CachedScanner};
 pub use error::{Error, Result};
 #[cfg(feature = "fused")]
 pub use fused::FusedScanner;
