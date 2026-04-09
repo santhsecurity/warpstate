@@ -111,8 +111,8 @@
     dead_code
 )]
 
-pub(crate) mod batch;
-pub(crate) mod compiled_index;
+pub mod batch;
+pub mod compiled_index;
 pub(crate) mod config;
 pub(crate) mod cpu;
 pub(crate) mod dfa;
@@ -120,7 +120,7 @@ pub(crate) mod error;
 #[cfg(feature = "fused")]
 pub(crate) mod fused;
 #[cfg(feature = "gpu")]
-pub(crate) mod gpu;
+pub mod gpu;
 pub(crate) mod gpu_scanner;
 pub(crate) mod hash_scan;
 mod literal_prefilter;
@@ -141,7 +141,7 @@ pub(crate) mod dma;
 #[allow(deprecated)]
 pub(crate) mod gpu_dfa;
 #[cfg(feature = "gpu")]
-pub(crate) mod gpu_smem;
+pub mod gpu_smem;
 /// Trait definition for pattern matching backends.
 pub(crate) mod matcher;
 #[cfg(feature = "gpu")]

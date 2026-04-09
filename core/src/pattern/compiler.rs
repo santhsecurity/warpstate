@@ -76,9 +76,6 @@ impl PatternSetBuilder {
     /// Compile all patterns into a [`PatternSet`].
     #[allow(clippy::too_many_lines)]
     pub fn build(self) -> Result<PatternSet> {
-        if self.patterns.is_empty() {
-            return Err(Error::EmptyPatternSet);
-        }
 
         let max_u32 = u32::MAX as usize;
         if self.patterns.len() > max_u32 {

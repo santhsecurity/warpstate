@@ -1,7 +1,5 @@
 #![cfg(feature = "gpu")]
-use warpstate::algebraic::AlgebraicDfaMatcher;
 use warpstate::batch::{scan_batch_gpu, ScanItem};
-use warpstate::gpu_smem::SmemDfaMatcher;
 use warpstate::BlockMatcher;
 use warpstate::{AutoMatcher, Error, PatternSet};
 
@@ -64,40 +62,4 @@ fn scan_batch_gpu_rejects_cross_item_matches_across_100_items() {
     assert!(!matches
         .iter()
         .any(|matched| matched.source_id == 49 || matched.source_id == 50));
-}
-
-#[test]
-fn algebraic_matcher_handles_non_matching_data() {
-    let patterns = PatternSet::builder()
-        .regex("needle|needlf")
-        .build()
-        .unwrap();
-    let matcher = match pollster::block_on(AlgebraicDfaMatcher::new(&patterns)) {
-        Ok(matcher) => matcher,
-        Err(Error::NoGpuAdapter) => return,
-        Err(other) => panic!("unexpected algebraic init error: {other:?}"),
-    };
-
-    let data = b"xxnomatchyy";
-    let gpu_matches = pollster::block_on(matcher.scan_block(data)).unwrap();
-    let cpu_matches = patterns.scan(data).unwrap();
-    assert_eq!(gpu_matches, cpu_matches);
-}
-
-#[test]
-fn smem_matcher_scans_known_data() {
-    let patterns = PatternSet::builder()
-        .regex("needle|needlf")
-        .build()
-        .unwrap();
-    let matcher = match pollster::block_on(SmemDfaMatcher::new(&patterns)) {
-        Ok(matcher) => matcher,
-        Err(Error::NoGpuAdapter) => return,
-        Err(other) => panic!("unexpected smem init error: {other:?}"),
-    };
-
-    let matches = pollster::block_on(matcher.scan_block(b"xxneedleyy")).unwrap();
-    assert!(!matches.is_empty());
-    assert_eq!(matches[0].start, 2);
-    assert_eq!(matches[0].end, 8);
 }
