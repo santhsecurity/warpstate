@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "jit")]
 use dfajit::JitDfa;
-use regex_automata::dfa::{dense, Automaton};
+use regex_automata::dfa::dense;
 
 use crate::error::{Error, Result};
 

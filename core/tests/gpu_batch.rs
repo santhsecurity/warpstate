@@ -1,7 +1,8 @@
+#![cfg(feature = "gpu")]
 use warpstate::algebraic::AlgebraicDfaMatcher;
 use warpstate::batch::{scan_batch_gpu, ScanItem};
 use warpstate::gpu_smem::SmemDfaMatcher;
-use warpstate::matcher::BlockMatcher;
+use warpstate::BlockMatcher;
 use warpstate::{AutoMatcher, Error, PatternSet};
 
 #[test]

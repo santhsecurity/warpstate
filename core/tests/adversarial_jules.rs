@@ -1,3 +1,4 @@
+#![cfg(feature = "gpu")]
 use warpstate::{Error, Match, PatternSet};
 
 #[track_caller]
@@ -218,7 +219,7 @@ fn adv_corrupted_compiled_index_loading() {
 #[test]
 #[ignore = "wgpu panics on 16MB+ GPU buffer — exceeds adapter buffer size limit"]
 fn adv_gpu_16mb_end_limit_scan() {
-    use warpstate::gpu::GpuMatcher;
+    use warpstate::GpuMatcher;
     let ps = PatternSet::builder().literal("GPU_TEST").build().unwrap();
     let Ok(matcher) = pollster::block_on(GpuMatcher::new(&ps)) else {
         return; // skip test if no GPU adapter available in runner

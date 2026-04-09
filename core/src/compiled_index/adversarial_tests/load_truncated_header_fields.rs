@@ -33,7 +33,10 @@ fn load_truncated_header_fields() {
         match result {
             Err(Error::PatternCompilationFailed { reason }) => {
                 assert!(
-                    reason.contains("truncated") || reason.contains("CRC mismatch") || reason.contains("integrity") || reason.contains("overflowed"),
+                    reason.contains("truncated")
+                        || reason.contains("CRC mismatch")
+                        || reason.contains("integrity")
+                        || reason.contains("overflowed"),
                     "Error should mention truncation: {}",
                     reason
                 );

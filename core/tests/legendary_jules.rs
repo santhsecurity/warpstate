@@ -1,8 +1,9 @@
+#![cfg(feature = "gpu")]
 use std::sync::Arc;
 use warpstate::{Match, Matcher, PatternSet};
 
 #[cfg(feature = "gpu")]
-use warpstate::gpu::GpuMatcher;
+use warpstate::GpuMatcher;
 
 // Helper to check match positions exactly
 #[track_caller]

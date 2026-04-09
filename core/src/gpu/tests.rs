@@ -370,9 +370,12 @@ fn gpu_prefilter_emits_all_hash_matching_candidates() {
     // Verify each CPU match has a corresponding GPU match
     for cpu_match in &cpu_matches {
         assert!(
-            gpu_matches.iter().any(|gm| gm.pattern_id == cpu_match.pattern_id && gm.start == cpu_match.start),
+            gpu_matches
+                .iter()
+                .any(|gm| gm.pattern_id == cpu_match.pattern_id && gm.start == cpu_match.start),
             "CPU match (pattern={}, start={}) not found in GPU results",
-            cpu_match.pattern_id, cpu_match.start,
+            cpu_match.pattern_id,
+            cpu_match.start,
         );
     }
 }
@@ -406,12 +409,16 @@ fn gpu_prefilter_does_not_stop_at_shorter_prefix() {
     // The GPU literal backend returns overlapping matches (unlike CPU leftmost-first),
     // so we only verify that the longer pattern is NOT silently dropped.
     assert!(
-        gpu_matches.iter().any(|m| m.pattern_id == 1 && m.start == 10 && m.end == 17),
+        gpu_matches
+            .iter()
+            .any(|m| m.pattern_id == 1 && m.start == 10 && m.end == 17),
         "GPU must find 'testing' (pattern_id=1, start=10, end=17)"
     );
     // The shorter prefix pattern should also be found.
     assert!(
-        gpu_matches.iter().any(|m| m.pattern_id == 0 && m.start == 10 && m.end == 14),
+        gpu_matches
+            .iter()
+            .any(|m| m.pattern_id == 0 && m.start == 10 && m.end == 14),
         "GPU must find 'test' (pattern_id=0, start=10, end=14)"
     );
 }

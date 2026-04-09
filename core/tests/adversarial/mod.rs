@@ -1,3 +1,4 @@
+#![cfg(feature = "gpu")]
 //! Adversarial edge case tests for warpstate
 //!
 //! These tests are designed to break the crate by testing:

@@ -3,8 +3,8 @@
 //! Verifies invariants across backends, serialization, and edge cases.
 
 use proptest::prelude::*;
-use warpstate::compiled_index::CompiledPatternIndex;
-use warpstate::{cpu, PatternSet};
+use warpstate::CompiledPatternIndex;
+use warpstate::PatternSet;
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(10000))]

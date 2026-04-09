@@ -26,7 +26,9 @@ fn trailing_bytes_rejected() {
     match result {
         Err(Error::PatternCompilationFailed { reason }) => {
             assert!(
-                reason.contains("trailing") || reason.contains("CRC mismatch") || reason.contains("integrity"),
+                reason.contains("trailing")
+                    || reason.contains("CRC mismatch")
+                    || reason.contains("integrity"),
                 "Error should mention trailing bytes: {}",
                 reason
             );

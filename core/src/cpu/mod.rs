@@ -11,9 +11,7 @@ use crate::Match;
 
 pub mod scan;
 
-pub use self::scan::{
-    scan, scan_aho_corasick, scan_aho_corasick_overlapping, scan_count, scan_overlapping, scan_with,
-};
+pub use self::scan::{scan, scan_aho_corasick, scan_count, scan_overlapping, scan_with};
 
 /// Maximum input size the CPU backend supports.
 ///

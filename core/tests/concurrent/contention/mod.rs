@@ -1,3 +1,4 @@
+#![cfg(feature = "gpu")]
 use std::sync::Arc;
 use std::thread;
 use warpstate::*;

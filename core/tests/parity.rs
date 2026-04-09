@@ -1,9 +1,10 @@
+#![cfg(feature = "gpu")]
 use warpstate::algebraic::AlgebraicDfaMatcher;
-use warpstate::gpu::GpuMatcher;
+use warpstate::GpuMatcher;
 use warpstate::gpu_smem::SmemDfaMatcher;
-use warpstate::matcher::BlockMatcher;
+use warpstate::BlockMatcher;
 use warpstate::persistent::PersistentMatcher;
-use warpstate::pipeline::StreamPipeline;
+use warpstate::StreamPipeline;
 use warpstate::{Error, Matcher, PatternSet};
 
 #[test]

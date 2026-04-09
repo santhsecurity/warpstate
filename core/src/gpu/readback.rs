@@ -101,13 +101,7 @@ pub(crate) async fn read_matches(
         return Ok(Vec::new());
     }
 
-    await_buffer_map(
-        device,
-        queue,
-        match_staging,
-        "waiting for GPU match buffer",
-    )
-    .await?;
+    await_buffer_map(device, queue, match_staging, "waiting for GPU match buffer").await?;
 
     let match_data = match_staging.slice(..).get_mapped_range();
     let raw: &[u32] = bytemuck::cast_slice(&match_data);
@@ -143,14 +137,18 @@ pub(crate) async fn read_matches(
             continue;
         }
 
-        let start_offset = base_offset.checked_add(gpu_start).ok_or(Error::InputTooLarge {
-            bytes: usize::MAX,
-            max_bytes: u32::MAX as usize,
-        })?;
-        let end_offset = base_offset.checked_add(gpu_end).ok_or(Error::InputTooLarge {
-            bytes: usize::MAX,
-            max_bytes: u32::MAX as usize,
-        })?;
+        let start_offset = base_offset
+            .checked_add(gpu_start)
+            .ok_or(Error::InputTooLarge {
+                bytes: usize::MAX,
+                max_bytes: u32::MAX as usize,
+            })?;
+        let end_offset = base_offset
+            .checked_add(gpu_end)
+            .ok_or(Error::InputTooLarge {
+                bytes: usize::MAX,
+                max_bytes: u32::MAX as usize,
+            })?;
         let start = u32::try_from(start_offset).map_err(|_| Error::InputTooLarge {
             bytes: start_offset,
             max_bytes: u32::MAX as usize,

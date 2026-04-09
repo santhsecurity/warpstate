@@ -109,51 +109,51 @@
     dead_code
 )]
 
-pub mod batch;
-pub mod compiled_index;
-pub mod config;
-pub mod cpu;
-pub mod dfa;
-pub mod error;
+pub(crate) mod batch;
+pub(crate) mod compiled_index;
+pub(crate) mod config;
+pub(crate) mod cpu;
+pub(crate) mod dfa;
+pub(crate) mod error;
 #[cfg(feature = "fused")]
-pub mod fused;
+pub(crate) mod fused;
 #[cfg(feature = "gpu")]
-pub mod gpu;
-pub mod gpu_scanner;
-pub mod hash_scan;
+pub(crate) mod gpu;
+pub(crate) mod gpu_scanner;
+pub(crate) mod hash_scan;
 mod literal_prefilter;
-pub mod pattern;
-pub mod router;
-pub mod scanner;
+pub(crate) mod pattern;
+pub(crate) mod router;
+pub(crate) mod scanner;
 #[cfg(feature = "gpu")]
-pub mod shader;
-pub mod specialize;
+pub(crate) mod shader;
+pub(crate) mod specialize;
 
 // Production modules wired in
 #[cfg(feature = "gpu")]
-pub mod algebraic;
+pub(crate) mod algebraic;
 #[cfg(feature = "gpu")]
-pub mod dma;
+pub(crate) mod dma;
 /// DFA traversal on the GPU (deprecated — use persistent, smem, or algebraic).
 #[cfg(feature = "gpu")]
 #[allow(deprecated)]
-pub mod gpu_dfa;
+pub(crate) mod gpu_dfa;
 #[cfg(feature = "gpu")]
-pub mod gpu_smem;
+pub(crate) mod gpu_smem;
 /// Trait definition for pattern matching backends.
-pub mod matcher;
+pub(crate) mod matcher;
 #[cfg(feature = "gpu")]
-pub mod multi_gpu;
+pub(crate) mod multi_gpu;
 #[cfg(feature = "gpu")]
-pub mod persistent;
-pub mod pipeline;
+pub(crate) mod persistent;
+pub(crate) mod pipeline;
 #[cfg(feature = "gpu")]
-pub mod rolling_hash;
+pub(crate) mod rolling_hash;
 #[cfg(feature = "gpu")]
-pub mod shader_hash;
+pub(crate) mod shader_hash;
 #[cfg(feature = "gpu")]
-pub mod shader_smem;
-pub mod stream;
+pub(crate) mod shader_smem;
+pub(crate) mod stream;
 
 pub use compiled_index::CompiledPatternIndex;
 pub use config::{AutoMatcherConfig, DEFAULT_GPU_THRESHOLD, DEFAULT_MAX_MATCHES};
