@@ -470,7 +470,6 @@ fn gpu_cpu_parity_50_literals_100kb() {
 /// produces state-based pattern IDs that don't align with the literal pipeline's
 /// index space. This is a real bug in the GPU regex readback path.
 #[test]
-#[ignore = "FINDING: GPU regex DFA out-of-bounds pattern index (H19)"]
 fn gpu_cpu_parity_mixed_literal_regex() {
     if is_software_adapter() {
         return;
@@ -503,7 +502,6 @@ fn gpu_cpu_parity_mixed_literal_regex() {
 /// (3) Overlapping pattern matches at the same position.
 /// FINDING: Same GPU regex out-of-bounds as H19 — mixed literal+regex with overlaps.
 #[test]
-#[ignore = "FINDING: GPU regex DFA out-of-bounds pattern index (H19)"]
 fn gpu_cpu_parity_overlapping_same_position() {
     if is_software_adapter() {
         return;
@@ -536,7 +534,6 @@ fn gpu_cpu_parity_overlapping_same_position() {
 /// (4) Empty input returns empty matches.
 /// FINDING: GPU regex .* matches empty input differently than CPU — regex semantics edge case.
 #[test]
-#[ignore = "FINDING: GPU regex DFA empty input mismatch (H20)"]
 fn gpu_cpu_parity_empty_input() {
     if is_software_adapter() {
         return;
@@ -564,7 +561,6 @@ fn gpu_cpu_parity_empty_input() {
 /// (5) Input exactly at chunk boundary (128MB).
 /// FINDING: GPU scan at exactly 128MB triggers wgpu buffer allocation panic.
 #[test]
-#[ignore = "FINDING: GPU 128MB chunk boundary buffer panic (H21)"]
 fn gpu_cpu_parity_exact_chunk_boundary() {
     if is_software_adapter() {
         return;
@@ -823,7 +819,7 @@ fn gpu_is_device_lost_error_detects_sentinel() {
     let err = Error::GpuDeviceError {
         reason: "GPU count buffer contains sentinel value — device may be lost or shader did not execute. Fix: retry with smaller input or check GPU health.".to_string(),
     };
-    assert!(super::is_device_lost_error(&err));
+    assert!(super::is_recoverable_gpu_error(&err));
 }
 
 #[test]
@@ -831,12 +827,12 @@ fn gpu_is_device_lost_error_detects_timeout() {
     let err = Error::GpuDeviceError {
         reason: "GPU buffer map timed out after 30s: test".to_string(),
     };
-    assert!(super::is_device_lost_error(&err));
+    assert!(super::is_recoverable_gpu_error(&err));
 }
 
 #[test]
 fn gpu_is_device_lost_error_detects_buffer_map_failed() {
-    assert!(super::is_device_lost_error(&Error::BufferMapFailed));
+    assert!(super::is_recoverable_gpu_error(&Error::BufferMapFailed));
 }
 
 #[test]
@@ -845,5 +841,5 @@ fn gpu_is_device_lost_error_ignores_other_errors() {
         bytes: 1024,
         max_bytes: 512,
     };
-    assert!(!super::is_device_lost_error(&err));
+    assert!(!super::is_recoverable_gpu_error(&err));
 }

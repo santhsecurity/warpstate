@@ -32,7 +32,20 @@ use self::dispatch::{LiteralGpu, RegexGpu, SpecializedRegexGpu};
 
 /// Returns `true` if the error may be resolved by recreating the GPU device.
 fn is_recoverable_gpu_error(error: &Error) -> bool {
-    matches!(error, Error::GpuDeviceError { .. } | Error::BufferMapFailed)
+    match error {
+        Error::GpuDeviceError { reason } => {
+            reason.contains("sentinel")
+                || reason.contains("device may be lost")
+                || reason.contains("timed out")
+                || reason.contains("Out of Memory")
+                || reason.contains("out of memory")
+                || reason.contains("OOM")
+                || reason.contains("failed to create buffer")
+                || reason.contains("allocation failed")
+        }
+        Error::BufferMapFailed => true,
+        _ => false,
+    }
 }
 
 /// Default maximum input size per GPU chunk in bytes (128 MB).
@@ -450,19 +463,6 @@ pub(crate) fn to_u32_len(len: usize, max_bytes: usize) -> Result<u32> {
         bytes: len,
         max_bytes: max_bytes.min(hard_limit),
     })
-}
-
-/// Check if an error indicates the GPU device was lost.
-pub(crate) fn is_device_lost_error(err: &Error) -> bool {
-    match err {
-        Error::GpuDeviceError { reason } => {
-            reason.contains("sentinel")
-                || reason.contains("device may be lost")
-                || reason.contains("timed out")
-        }
-        Error::BufferMapFailed => true,
-        _ => false,
-    }
 }
 
 /// Check if the system GPU is a software renderer (llvmpipe, lavapipe, etc.)
