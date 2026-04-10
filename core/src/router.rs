@@ -398,6 +398,18 @@ impl AutoMatcher {
 
     #[cfg(feature = "gpu")]
     fn init_gpu_backend(&self, device_queue: SharedDeviceQueue) -> Option<GpuBackend> {
+        let regex_count = self.patterns.ir().regex_patterns().len();
+        if regex_count > 1 {
+            if let Ok(standard) =
+                GpuMatcher::from_device(&device_queue, &self.patterns, self.config.clone())
+            {
+                tracing::debug!("init_gpu_backend: chose GpuMatcher for multi-regex ensemble");
+                return Some(GpuBackend::Standard(standard));
+            }
+            tracing::warn!("init_gpu_backend: multi-regex ensemble initialization failed");
+            return None;
+        }
+
         if let Ok(algebraic) =
             AlgebraicDfaMatcher::from_device(Arc::clone(&device_queue), &self.patterns)
         {

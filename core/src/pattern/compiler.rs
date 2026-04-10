@@ -9,11 +9,22 @@ use crate::error::{Error, Result};
 use crate::literal_prefilter::LiteralPrefilterTable;
 
 /// Builder for constructing a [`PatternSet`].
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct PatternSetBuilder {
     pub(super) patterns: Vec<PendingPattern>,
-    /// When true, literal patterns use ASCII case-insensitive matching.
     pub(super) ascii_case_insensitive: bool,
+    /// DFA size limit in bytes. Default 50MB (CPU). Set higher for GPU (e.g. 2GB).
+    pub(super) dfa_size_limit: usize,
+}
+
+impl Default for PatternSetBuilder {
+    fn default() -> Self {
+        Self {
+            patterns: Vec::new(),
+            ascii_case_insensitive: false,
+            dfa_size_limit: RegexDFA::DEFAULT_DFA_SIZE_LIMIT,
+        }
+    }
 }
 
 impl PatternSetBuilder {
@@ -64,6 +75,14 @@ impl PatternSetBuilder {
         self
     }
 
+    /// Set DFA size limit in bytes. Default 50MB. For GPU workloads with
+    /// hundreds of regex conditions, set to available VRAM (e.g. `2_000_000_000`).
+    #[must_use]
+    pub fn dfa_size_limit(mut self, limit: usize) -> Self {
+        self.dfa_size_limit = limit;
+        self
+    }
+
     /// Add a named regex pattern.
     pub fn named_regex(mut self, name: &str, pattern: &str) -> Self {
         self.patterns.push(PendingPattern::Regex {
@@ -99,7 +118,6 @@ impl PatternSetBuilder {
         let hash_window_len = 8u32;
 
         let mut regex_patterns = Vec::new();
-        let mut regex_original_ids = Vec::new();
 
         for (i, pattern) in self.patterns.into_iter().enumerate() {
             match pattern {
@@ -195,7 +213,6 @@ impl PatternSetBuilder {
                     }
 
                     regex_patterns.push((i, pattern));
-                    regex_original_ids.push(i);
                     names.push(name);
                     matchers.push(CompiledPattern {
                         id: i,
@@ -205,12 +222,15 @@ impl PatternSetBuilder {
             }
         }
 
-        if !regex_patterns.is_empty() {
-            let str_refs: Vec<&str> = regex_patterns
-                .iter()
-                .map(|(_, pattern)| AsRef::as_ref(pattern))
-                .collect();
-            regex_dfas.push(RegexDFA::build(&str_refs, &regex_original_ids)?);
+        // Compile each regex INDEPENDENTLY — no merge, no DFA explosion.
+        // GPU ensemble shader runs each small DFA in its own workgroup.
+        // This scales to millions of regexes: compile time is O(n), not O(2^n).
+        for (original_id, pattern) in &regex_patterns {
+            regex_dfas.push(RegexDFA::build_with_limit(
+                &[pattern.as_str()],
+                &[*original_id],
+                self.dfa_size_limit,
+            )?);
         }
 
         let mut literal_automaton_ids = Vec::new();

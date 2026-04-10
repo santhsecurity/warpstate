@@ -56,25 +56,7 @@ impl HotSwapPatternSet {
     /// Same contract as [`PatternSet::scan`], using the currently active pattern set.
     pub fn scan(&self, data: &[u8], out_matches: &mut [crate::Match]) -> Result<usize> {
         let current = self.current();
-        crate::cpu::check_input_size(data)?;
-        let mut count = 0;
-        crate::cpu::scan_with(&current.ir, data, &mut |matched| {
-            if count >= out_matches.len() {
-                false
-            } else {
-                out_matches[count] = matched;
-                count += 1;
-                true
-            }
-        })?;
-        crate::cpu::sort_matches_if_needed(&mut out_matches[..count]);
-        if count == out_matches.len() {
-            return Err(Error::MatchBufferOverflow {
-                count,
-                max: count.min(crate::cpu::MAX_CPU_MATCHES),
-            });
-        }
-        Ok(count)
+        current.strategy.scan(data, &current.ir, out_matches)
     }
 
     /// Same contract as [`PatternSet::scan_with`], using the currently active pattern set.
@@ -83,7 +65,7 @@ impl HotSwapPatternSet {
         F: FnMut(crate::Match) -> bool,
     {
         let current = self.current();
-        crate::cpu::scan_with(&current.ir, data, &mut visitor)
+        current.strategy.scan_with(data, &current.ir, &mut visitor)
     }
 }
 
@@ -379,7 +361,7 @@ mod tests {
         assert_eq!(set.len(), 4);
         // Should have 2 literals and 2 regex patterns
         assert_eq!(set.ir.offsets.len(), 2); // 2 literals
-        assert_eq!(set.ir.regex_dfas.len(), 1); // 2 regexes in one DFA
+        assert_eq!(set.ir.regex_dfas.len(), 2); // each regex compiles independently
     }
 
     /// Test PatternSet is_empty

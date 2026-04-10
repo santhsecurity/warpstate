@@ -2,6 +2,8 @@
 
 /// GPU matcher construction helpers.
 pub mod builder;
+/// Shared-memory regex ensemble backend.
+pub mod ensemble;
 /// GPU device acquisition and shared buffer utilities.
 pub mod device;
 /// GPU scan dispatch paths for literal/regex kernels.
@@ -188,7 +190,7 @@ impl GpuMatcher {
         let regex = if specialized_regex.is_some() {
             None // Don't build buffer-based if specialized succeeds
         } else {
-            build_regex_gpu(&device, patterns)?
+            build_regex_gpu(&device, &queue, patterns)?
         };
 
         let state = GpuState {
@@ -335,7 +337,7 @@ impl GpuMatcher {
         let regex = if specialized_regex.is_some() {
             None
         } else {
-            build_regex_gpu(&device, &self.patterns)?
+            build_regex_gpu(&device, &queue, &self.patterns)?
         };
 
         let state = GpuState {
@@ -446,11 +448,10 @@ impl GpuMatcher {
             device,
             queue,
             buffer_pool,
+            &self.patterns,
             regex,
             data,
             base_offset,
-            self.max_matches,
-            self.max_input_size,
             self.max_regex_input_size,
         )
         .await

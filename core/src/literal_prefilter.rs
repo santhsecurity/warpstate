@@ -100,9 +100,18 @@ impl LiteralPrefilterTable {
         }
 
         let bucket_idx = meta[0] + (hash & meta[1]);
-        let range = self.bucket_ranges[bucket_idx as usize];
+        let Some(range) = self.bucket_ranges.get(bucket_idx as usize) else {
+            return Box::new(std::iter::empty());
+        };
+        let start = range[0] as usize;
+        let Some(end) = start.checked_add(range[1] as usize) else {
+            return Box::new(std::iter::empty());
+        };
+        let Some(slice) = self.entries.get(start..end) else {
+            return Box::new(std::iter::empty());
+        };
         Box::new(
-            self.entries[range[0] as usize..(range[0] + range[1]) as usize]
+            slice
                 .iter()
                 .filter(move |entry| entry[0] == hash)
                 .map(|entry| entry[1]),

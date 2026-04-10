@@ -136,7 +136,11 @@ impl<'a> CachedScanner<'a> {
         if ir.offsets.len() == 1 && ir.regex_dfas.is_empty() && !ir.case_insensitive {
             let (start, len) = ir.offsets[0];
             let start = start as usize;
-            let end = start + len as usize;
+            let end = start.checked_add(len as usize).ok_or_else(|| {
+                Error::PatternCompilationFailed {
+                    reason: "single-literal scanner offset overflow. Fix: rebuild the pattern set and retry.".to_string(),
+                }
+            })?;
             let needle = ir.packed_bytes.get(start..end).ok_or_else(|| {
                 Error::PatternCompilationFailed {
                     reason: "single-literal scanner references bytes outside the packed pattern buffer. Fix: rebuild the pattern set and retry."

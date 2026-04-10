@@ -523,12 +523,18 @@ where
 
 /// Estimate initial match capacity based on data size.
 ///
-/// Uses `data_len / 4` as a conservative estimate — in the worst case, a
-/// 2-byte pattern matches every other byte. For inputs > 4MB, caps at 1M
-/// matches to avoid pathological allocations.
+/// For small inputs (<= 64KB), use `data_len` as capacity since match density
+/// can be high (e.g., single-char patterns matching every byte).
+/// For large inputs, uses `data_len / 1024` — at internet scale, files are
+/// scanned in large blocks but match density is low. Capped at 100K to
+/// prevent OOM from pathological inputs.
 #[inline]
 pub(crate) fn estimate_match_capacity(data_len: usize) -> usize {
-    data_len.clamp(64, 1_000_000)
+    if data_len <= 65_536 {
+        data_len.clamp(64, 65_536)
+    } else {
+        (data_len / 1024).clamp(64, 100_000)
+    }
 }
 
 #[cfg(test)]

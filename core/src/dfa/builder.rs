@@ -11,14 +11,24 @@ use crate::error::{Error, Result};
 impl RegexDFA {
     /// Build a dense Regex DFA.
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
+    /// Default DFA size limit (50MB) — safe for CPU-only workloads.
+    pub const DEFAULT_DFA_SIZE_LIMIT: usize = 50_000_000;
+
     pub fn build(pattern_strings: &[&str], original_ids: &[usize]) -> Result<Self> {
+        Self::build_with_limit(pattern_strings, original_ids, Self::DEFAULT_DFA_SIZE_LIMIT)
+    }
+
+    /// Build with a caller-supplied DFA size limit. For GPU workloads with
+    /// hundreds of regex conditions, set this to available VRAM (e.g. 2GB).
+    #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
+    pub fn build_with_limit(pattern_strings: &[&str], original_ids: &[usize], dfa_size_limit: usize) -> Result<Self> {
         // Build with anchored-only start kind. The GPU shader starts a separate
         // DFA walk at every byte position, so the start state MUST reject bytes
         // that don't match the pattern's first character (no implicit `.*` prefix).
         let compiled = dense::Builder::new()
             .configure(
                 dense::Config::new()
-                    .dfa_size_limit(Some(50_000_000))
+                    .dfa_size_limit(Some(dfa_size_limit))
                     .match_kind(regex_automata::MatchKind::All)
                     // Both: GPU needs anchored (walks from every byte),
                     // CPU native scan needs anchored per-position search.

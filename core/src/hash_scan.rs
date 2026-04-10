@@ -189,8 +189,13 @@ impl LengthGroupAligned {
                     continue;
                 };
                 let pattern_start = pattern_start_u32 as usize;
-                let pattern_end = pattern_start + pattern_len_u32 as usize;
-                if window == &packed_bytes[pattern_start..pattern_end] {
+                let Some(pattern_end) = pattern_start.checked_add(pattern_len_u32 as usize) else {
+                    continue;
+                };
+                let Some(pattern_slice) = packed_bytes.get(pattern_start..pattern_end) else {
+                    continue;
+                };
+                if window == pattern_slice {
                     emit(Match {
                         pattern_id,
                         start: start_u32,
