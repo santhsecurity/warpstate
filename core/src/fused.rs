@@ -328,10 +328,18 @@ impl FusedScanner {
             .scan_with(&data[region_start..region_end], |matched| {
                 let start = region_start + matched.start as usize;
                 let end = region_start + matched.end as usize;
+                // Safe: check_input_size guarantees data.len() <= u32::MAX,
+                // so region offsets + match offsets fit in u32.
+                let Ok(start_u32) = u32::try_from(start) else {
+                    return false; // Stop scanning if offset overflows
+                };
+                let Ok(end_u32) = u32::try_from(end) else {
+                    return false;
+                };
                 keep_scanning = visitor(Match {
                     pattern_id: matched.pattern_id,
-                    start: start as u32,
-                    end: end as u32,
+                    start: start_u32,
+                    end: end_u32,
                     padding: matched.padding,
                 });
                 keep_scanning
