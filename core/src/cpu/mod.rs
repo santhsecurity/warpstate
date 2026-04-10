@@ -280,9 +280,16 @@ mod tests {
                     max: MAX_CPU_MATCHES,
                 });
             }
-            // pattern_id comes from automaton ID which is bounded by pattern count
+            let ac_idx = mat.pattern().as_usize();
             #[allow(clippy::cast_possible_truncation)]
-            let pattern_id = ir.literal_automaton_ids[mat.pattern().as_usize()] as u32;
+            let pattern_id = *ir.literal_automaton_ids.get(ac_idx).ok_or_else(|| {
+                crate::Error::PatternCompilationFailed {
+                    reason: format!(
+                        "AC pattern index {ac_idx} exceeds literal_automaton_ids length {}. fix: rebuild pattern set.",
+                        ir.literal_automaton_ids.len()
+                    ),
+                }
+            })? as u32;
             // mat indices are bounded by data.len() which is validated <= u32::MAX
             out_matches[count] = Match {
                 pattern_id,

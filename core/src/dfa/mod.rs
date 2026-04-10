@@ -30,25 +30,25 @@ pub const MASK_STATE: u32 = 0x3FFF_FFFF;
 #[derive(Debug, Clone)]
 pub struct CompactDfa {
     /// 4-bit transition table (if states < 16).
-    pub trans_u4: Option<Vec<u8>>,
+    pub(crate) trans_u4: Option<Vec<u8>>,
     /// 8-bit transition table (if states < 256).
-    pub trans_u8: Option<Vec<u8>>,
+    pub(crate) trans_u8: Option<Vec<u8>>,
     /// 32-bit transition table fallback.
-    pub trans_u32: Vec<u32>,
+    pub(crate) trans_u32: Vec<u32>,
     /// State flags: 1 = match, 2 = dead, 4 = quit.
-    pub flags: Vec<u8>,
+    pub(crate) flags: Vec<u8>,
     /// Match pattern ID for each state.
-    pub match_pattern: Vec<u32>,
+    pub(crate) match_pattern: Vec<u32>,
     /// Unanchored start state.
-    pub start_unanchored: u32,
+    pub(crate) start_unanchored: u32,
     /// Anchored start state.
-    pub start_anchored: u32,
+    pub(crate) start_anchored: u32,
     /// Number of alphabet classes.
-    pub class_count: usize,
+    pub(crate) class_count: usize,
     /// End of input class.
-    pub eoi_class: usize,
+    pub(crate) eoi_class: usize,
     /// Byte to class mapping.
-    pub byte_classes: [u8; 256],
+    pub(crate) byte_classes: [u8; 256],
 }
 
 impl CompactDfa {

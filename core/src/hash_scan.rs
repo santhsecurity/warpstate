@@ -163,9 +163,13 @@ impl LengthGroupAligned {
         let window = &data[start..end];
         let window_hash = compute_fnv1a(window);
 
-        // Bounds check for u32 conversion - hot path assumes success
-        let start_u32 = start as u32;
-        let end_u32 = end as u32;
+        // Bounds check for u32 conversion — files > 4GB would silently truncate offsets.
+        let Ok(start_u32) = u32::try_from(start) else {
+            return;
+        };
+        let Ok(end_u32) = u32::try_from(end) else {
+            return;
+        };
 
         for probe in 0..self.table.len() {
             let slot = (window_hash as usize).wrapping_add(probe) & self.mask;
