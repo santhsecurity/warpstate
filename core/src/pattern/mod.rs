@@ -162,8 +162,7 @@ impl PatternSet {
     where
         F: FnMut(crate::Match) -> bool,
     {
-        let strategy = crate::specialize::ScanStrategy::select(self);
-        strategy.scan_with(data, &self.ir, &mut visitor)
+        self.strategy.scan_with(data, &self.ir, &mut visitor)
     }
 
     /// Count non-overlapping matches without allocating a `Vec<Match>`.
