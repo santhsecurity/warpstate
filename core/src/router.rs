@@ -223,13 +223,7 @@ impl AutoMatcher {
     /// repeated calls, prefer using the async [scan](Self::scan) method
     /// with a shared runtime.
     pub fn scan_blocking(&self, input: &[u8]) -> Result<Vec<Match>> {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| crate::error::Error::PatternCompilationFailed {
-                reason: format!("tokio runtime creation failed: {e}"),
-            })?
-            .block_on(self.scan(input))
+        pollster::block_on(self.scan(input))
     }
 
     #[cfg(feature = "gpu")]

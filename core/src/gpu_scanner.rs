@@ -157,13 +157,7 @@ impl ByteScanner for GpuScanner {
 fn create_gpu_backend(patterns: &PatternSet) -> Result<GpuMatcher> {
     let patterns = patterns.clone();
     std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| crate::Error::GpuDeviceError {
-                reason: format!("tokio runtime creation failed during GPU scanner initialization: {error}"),
-            })?;
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.block_on(GpuMatcher::new(&patterns))))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pollster::block_on(GpuMatcher::new(&patterns))))
             .map_err(|panic_payload| crate::Error::GpuDeviceError {
                 reason: format!(
                     "GPU pipeline initialization panicked. Fix: validate the active GPU shaders or driver stack before enabling GPU scan mode. Panic: {}",
