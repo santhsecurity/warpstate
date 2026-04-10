@@ -402,6 +402,7 @@ mod tests {
     }
 }
 
+#[async_trait::async_trait]
 impl BlockMatcher for RollingHashMatcher {
     async fn scan_block(&self, data: &[u8]) -> matchkit::Result<Vec<Match>> {
         self.scan_block_impl(data).await.map_err(Into::into)

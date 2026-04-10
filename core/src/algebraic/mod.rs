@@ -201,6 +201,7 @@ impl AlgebraicDfaMatcher {
     }
 }
 
+#[async_trait::async_trait]
 impl BlockMatcher for AlgebraicDfaMatcher {
     async fn scan_block(&self, data: &[u8]) -> matchkit::Result<Vec<Match>> {
         match &self.delegate {

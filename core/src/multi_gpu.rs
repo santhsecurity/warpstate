@@ -160,6 +160,7 @@ impl MultiGpuMatcher {
     }
 }
 
+#[async_trait::async_trait]
 impl Matcher for MultiGpuMatcher {
     async fn scan(&self, data: &[u8]) -> matchkit::Result<Vec<Match>> {
         Self::scan(self, data).await.map_err(Into::into)

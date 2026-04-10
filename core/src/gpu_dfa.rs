@@ -170,6 +170,7 @@ impl GpuDfaMatcher {
     }
 }
 
+#[async_trait::async_trait]
 impl Matcher for GpuDfaMatcher {
     #[allow(clippy::too_many_lines)]
     async fn scan(&self, data: &[u8]) -> matchkit::Result<Vec<Match>> {

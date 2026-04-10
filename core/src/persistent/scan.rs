@@ -35,6 +35,7 @@ impl Drop for BufferSetGuard<'_> {
     }
 }
 
+#[async_trait::async_trait]
 impl BlockMatcher for PersistentMatcher {
     async fn scan_block(&self, data: &[u8]) -> matchkit::Result<Vec<Match>> {
         if data.is_empty() {

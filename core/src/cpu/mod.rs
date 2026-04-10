@@ -37,7 +37,10 @@ pub(crate) const HASH_SCANNER_LITERAL_THRESHOLD: usize = 5_000;
 pub(crate) const MAX_CPU_MATCHES: usize = 1_048_576;
 
 pub(crate) fn estimated_match_capacity(data_len: usize) -> usize {
-    data_len.clamp(64, 1_000_000)
+    // Conservative: assume 1 match per 1KB. Typical match density is ~0.01%.
+    // At 16 bytes per Match, 1 match/KB means 16 bytes overhead per KB of input.
+    let estimated = data_len / 1024;
+    estimated.clamp(64, 100_000)
 }
 
 pub(crate) fn check_input_size(data: &[u8]) -> Result<()> {
