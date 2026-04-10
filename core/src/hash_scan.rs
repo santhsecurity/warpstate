@@ -255,8 +255,6 @@ impl HashScanner {
                     reason: "hash scanner literal length does not fit in usize. Fix: rebuild the pattern set.".to_string(),
                 }
             })?;
-            let start = start_u32 as usize;
-            let length = len_u32 as usize;
 
             if length == 0 {
                 return Err(Error::PatternCompilationFailed {
