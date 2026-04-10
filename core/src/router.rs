@@ -131,6 +131,16 @@ impl AutoMatcher {
         })
     }
 
+    /// Synchronous constructor — safe from inside or outside async runtimes.
+    pub fn new_blocking(patterns: &PatternSet) -> Result<Self> {
+        pollster::block_on(Self::new(patterns))
+    }
+
+    /// Synchronous constructor with config — safe from inside or outside async.
+    pub fn with_config_blocking(patterns: &PatternSet, config: AutoMatcherConfig) -> Result<Self> {
+        pollster::block_on(Self::with_config(patterns, config))
+    }
+
     /// Backward-compatible constructor for ad-hoc options.
     pub async fn with_options(
         patterns: &PatternSet,
@@ -219,11 +229,33 @@ impl AutoMatcher {
 
     /// Synchronous scan for callers without an async runtime.
     ///
-    /// Internally creates a minimal tokio current-thread runtime. For
-    /// repeated calls, prefer using the async [scan](Self::scan) method
-    /// with a shared runtime.
+    /// Safe to call from inside or outside a tokio runtime — uses a
+    /// dedicated thread to avoid runtime nesting panics.
     pub fn scan_blocking(&self, input: &[u8]) -> Result<Vec<Match>> {
-        pollster::block_on(self.scan(input))
+        // Try pollster first (works when NOT inside a tokio runtime).
+        // If we're inside tokio, spawn a thread with its own runtime.
+        if tokio::runtime::Handle::try_current().is_err() {
+            return pollster::block_on(self.scan(input));
+        }
+        // Inside a tokio runtime — must escape to a new thread.
+        let input = input.to_vec();
+        let this = self as *const Self as usize;
+        // SAFETY: AutoMatcher is Send+Sync and we join before returning.
+        let handle = std::thread::spawn(move || {
+            let matcher = unsafe { &*(this as *const Self) };
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| crate::error::Error::PatternCompilationFailed {
+                    reason: format!("scan_blocking runtime: {e}"),
+                })?;
+            rt.block_on(matcher.scan(&input))
+        });
+        handle
+            .join()
+            .map_err(|_| crate::error::Error::PatternCompilationFailed {
+                reason: "scan_blocking thread panicked".to_string(),
+            })?
     }
 
     #[cfg(feature = "gpu")]

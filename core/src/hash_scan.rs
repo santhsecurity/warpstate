@@ -181,7 +181,9 @@ impl LengthGroupAligned {
             // SAFETY: pattern_index is valid by construction
             let pattern_idx = entry.pattern_index as usize;
             if let Some(&(pattern_id, literal_index)) = self.patterns.get(pattern_idx) {
-                let (pattern_start_u32, pattern_len_u32) = offsets[literal_index];
+                let Some(&(pattern_start_u32, pattern_len_u32)) = offsets.get(literal_index) else {
+                    continue;
+                };
                 let pattern_start = pattern_start_u32 as usize;
                 let pattern_end = pattern_start + pattern_len_u32 as usize;
                 if window == &packed_bytes[pattern_start..pattern_end] {
