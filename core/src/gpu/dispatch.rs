@@ -247,7 +247,7 @@ pub(crate) async fn scan_literal_chunk(
         });
         pass.set_pipeline(&literal.prefilter_pipeline);
         pass.set_bind_group(0, &prefilter_bind_group, &[]);
-        pass.dispatch_workgroups(workgroups, 1, 1);
+        pass.dispatch_workgroups(workgroups.x, workgroups.y, workgroups.z);
     }
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -256,7 +256,7 @@ pub(crate) async fn scan_literal_chunk(
         });
         pass.set_pipeline(&literal.verify_pipeline);
         pass.set_bind_group(0, &verify_bind_group, &[]);
-        pass.dispatch_workgroups(workgroups, 1, 1);
+        pass.dispatch_workgroups(workgroups.x, workgroups.y, workgroups.z);
     }
 
     let count_staging = device::readback_buffer(device, 8, "warpstate literal count staging");
@@ -347,19 +347,32 @@ pub(crate) async fn scan_literal_chunk(
     result
 }
 
-/// Compute the number of workgroups needed for an input, enforcing GPU limits.
-pub(crate) fn compute_workgroups(device: &wgpu::Device, input_len: u32) -> Result<u32> {
+/// Workgroup dispatch dimensions.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WorkgroupDims {
+    pub x: u32,
+    pub y: u32,
+    pub z: u32,
+}
+
+/// Compute the workgroup dimensions needed for an input.
+/// Uses 2D dispatch when the 1D workgroup count would exceed the device limit.
+pub(crate) fn compute_workgroups(device: &wgpu::Device, input_len: u32) -> Result<WorkgroupDims> {
     let raw = input_len.div_ceil(shader::WORKGROUP_SIZE);
     let max = device.limits().max_compute_workgroups_per_dimension;
-    if raw > max {
+    // Shaders support 2D dispatch via gid.y to handle larger inputs.
+    let max_x = max.min(65_535);
+    if raw > max_x * max {
         return Err(Error::GpuDeviceError {
             reason: format!(
-                "input requires {raw} workgroups, exceeding device limit {max}. \
+                "input requires {raw} workgroups, exceeding 2D device limit {max_x}×{max}. \
                  Fix: reduce chunk size or max input size."
             ),
         });
     }
-    Ok(raw)
+    let x = raw.min(max_x);
+    let y = raw.div_ceil(max_x);
+    Ok(WorkgroupDims { x, y, z: 1 })
 }
 
 pub(crate) async fn scan_regex_chunk(
@@ -448,7 +461,7 @@ pub(crate) async fn scan_regex_chunk(
         });
         pass.set_pipeline(&regex.pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(workgroups, 1, 1);
+        pass.dispatch_workgroups(workgroups.x, workgroups.y, workgroups.z);
     }
     let count_staging = device::readback_buffer(device, 8, "warpstate regex count staging");
     encoder.copy_buffer_to_buffer(&count_buf, 0, &count_staging, 0, 8);
@@ -550,7 +563,7 @@ pub(crate) async fn scan_specialized_regex_chunk(
         });
         pass.set_pipeline(&specialized.pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(workgroups, 1, 1);
+        pass.dispatch_workgroups(workgroups.x, workgroups.y, workgroups.z);
     }
     let count_staging =
         device::readback_buffer(device, 8, "warpstate specialized regex count staging");

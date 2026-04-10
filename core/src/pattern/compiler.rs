@@ -284,7 +284,7 @@ impl PatternSetBuilder {
             cached_hash_scanner: None,
         };
         let cached_hash_scanner = if crate::cpu::should_use_hash_scanner(&ir) {
-            Some(crate::hash_scan::HashScanner::build(&ir))
+            Some(crate::hash_scan::HashScanner::build(&ir)?)
         } else {
             None
         };

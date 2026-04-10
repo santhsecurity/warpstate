@@ -3,7 +3,7 @@ use aho_corasick::AhoCorasick;
 use super::{check_input_size, sort_matches_if_needed, MAX_CPU_INPUT_BYTES, MAX_CPU_MATCHES};
 use crate::error::{Error, Result};
 use crate::hash_scan::HashScanner;
-use crate::pattern::PatternIR;
+use crate::pattern::{CompiledPatternKind, PatternIR};
 use crate::Match;
 
 /// Non-overlapping scan — SIMD-accelerated Teddy prefilters enabled.
@@ -61,6 +61,15 @@ where
     // prefer CachedScanner which compiles once and reuses across files.
     if ir.offsets.len() == 1 && ir.regex_dfas.is_empty() && ir.case_insensitive {
         if let Some(re) = &ir.fast_ci_regex {
+            let pattern_id = ir.literal_automaton_ids.first().copied().ok_or_else(|| {
+                Error::PatternCompilationFailed {
+                    reason: "case-insensitive single-literal scan is missing automaton-to-pattern mapping. Fix: rebuild the pattern set."
+                        .to_string(),
+                }
+            })?;
+            let pattern_id = u32::try_from(pattern_id).map_err(|_| Error::PatternCompilationFailed {
+                reason: "case-insensitive single-literal pattern ID exceeds u32::MAX. Fix: rebuild the pattern set.".to_string(),
+            })?;
             for m in re.find_iter(data) {
                 let s = u32::try_from(m.start()).map_err(|_| Error::InputTooLarge {
                     bytes: m.start(),
@@ -71,7 +80,7 @@ where
                     max_bytes: MAX_CPU_INPUT_BYTES,
                 })?;
                 if !visitor(Match {
-                    pattern_id: 0,
+                    pattern_id,
                     start: s,
                     end: e,
                     padding: 0,
@@ -85,7 +94,7 @@ where
     if let Some(scanner) = &ir.cached_hash_scanner {
         scan_literals_fast_with_hash(scanner, data, visitor)?;
     } else if super::should_use_hash_scanner(ir) {
-        let scanner = HashScanner::build(ir);
+        let scanner = HashScanner::build(ir)?;
         scan_literals_fast_with_hash(&scanner, data, visitor)?;
     } else {
         scan_literals_fast_with(ir, data, visitor)?;
@@ -154,9 +163,15 @@ where
     F: FnMut(Match) -> bool,
 {
     let finder = memchr::memmem::Finder::new(needle);
-    // pattern_id comes from automaton ID which is bounded by pattern count
-    #[allow(clippy::cast_possible_truncation)]
-    let pattern_id = ir.literal_automaton_ids.first().copied().unwrap_or(0) as u32;
+    let pattern_id = ir.literal_automaton_ids.first().copied().ok_or_else(|| {
+        Error::PatternCompilationFailed {
+            reason: "single-literal scan is missing automaton-to-pattern mapping. Fix: rebuild the pattern set."
+                .to_string(),
+        }
+    })?;
+    let pattern_id = u32::try_from(pattern_id).map_err(|_| Error::PatternCompilationFailed {
+        reason: "single-literal pattern ID exceeds u32::MAX. Fix: rebuild the pattern set.".to_string(),
+    })?;
     // needle_len is bounded by the literal length which is reasonable
     #[allow(clippy::cast_possible_truncation)]
     let needle_len = needle.len() as u32;
@@ -249,9 +264,19 @@ where
                 max: MAX_CPU_MATCHES,
             });
         }
-        // SAFETY: mat.pattern() index is valid by AhoCorasick contract
-        #[allow(clippy::cast_possible_truncation)]
-        let pattern_id = ir.literal_automaton_ids[mat.pattern().as_usize()] as u32;
+        let pattern_id = ir
+            .literal_automaton_ids
+            .get(mat.pattern().as_usize())
+            .copied()
+            .and_then(|pattern_id| u32::try_from(pattern_id).ok())
+            .ok_or_else(|| {
+                Error::PatternCompilationFailed {
+                    reason: format!(
+                        "literal AC pattern mapping missing or out of range for index {}. Fix: rebuild the pattern set.",
+                        mat.pattern().as_usize()
+                    ),
+                }
+            })?;
         // SAFETY: mat.start() < data.len() which is validated <= u32::MAX by check_input_size
         #[allow(clippy::cast_possible_truncation)]
         let start = mat.start() as u32;
@@ -285,20 +310,47 @@ fn scan_literals_overlapping(
         return Ok(0);
     }
 
-    // Extract the same literal patterns used by the primary automaton.
-    // ir.literal_automaton_ids maps automaton-internal pattern indices to
-    // original pattern IDs. We rebuild from the same patterns so the
-    // index mapping stays valid.
+    // Rebuild patterns in the exact order used by the primary Aho-Corasick automaton
+    // and preserve the corresponding original pattern IDs.
     let mut literal_patterns: Vec<&[u8]> = Vec::with_capacity(ir.literal_automaton_ids.len());
-    for &original_id in &ir.literal_automaton_ids {
-        if original_id < ir.offsets.len() {
-            let (start, len) = ir.offsets[original_id];
-            let s = start as usize;
-            let e = s + len as usize;
-            if e <= ir.packed_bytes.len() {
-                literal_patterns.push(&ir.packed_bytes[s..e]);
+    let mut literal_pattern_ids = Vec::with_capacity(ir.literal_automaton_ids.len());
+    for matcher in &ir.matchers {
+        let CompiledPatternKind::Literal { literal_index } = matcher.kind else {
+            continue;
+        };
+        let (start_u32, len_u32) = *ir.offsets.get(literal_index).ok_or_else(|| {
+            Error::PatternCompilationFailed {
+                reason:
+                    "literal automaton mapping references an invalid literal index. Fix: rebuild the pattern set."
+                        .to_string(),
             }
+        })?;
+        let pattern_id = ir.literal_automaton_ids.get(literal_index).copied().ok_or_else(|| {
+            Error::PatternCompilationFailed {
+                reason:
+                    "literal automaton IDs are missing entries. Fix: rebuild the pattern set."
+                        .to_string(),
+            }
+        })?;
+        let start = usize::try_from(start_u32).map_err(|_| Error::PatternCompilationFailed {
+            reason: "literal pattern start offset does not fit in usize. Fix: rebuild the pattern set."
+                .to_string(),
+        })?;
+        let len = usize::try_from(len_u32).map_err(|_| Error::PatternCompilationFailed {
+            reason: "literal pattern length does not fit in usize. Fix: rebuild the pattern set."
+                .to_string(),
+        })?;
+        let end = start.checked_add(len).ok_or_else(|| Error::PatternCompilationFailed {
+            reason: "literal pattern range overflow. Fix: rebuild the pattern set.".to_string(),
+        })?;
+        if end > ir.packed_bytes.len() {
+            return Err(Error::PatternCompilationFailed {
+                reason: "literal pattern references bytes outside the packed buffer. Fix: rebuild the pattern set."
+                    .to_string(),
+            });
         }
+        literal_patterns.push(&ir.packed_bytes[start..end]);
+        literal_pattern_ids.push(pattern_id);
     }
     if literal_patterns.is_empty() {
         return Ok(0);
@@ -320,9 +372,23 @@ fn scan_literals_overlapping(
                 max: out_matches.len().min(MAX_CPU_MATCHES),
             });
         }
-        // SAFETY: mat.pattern() index is valid by AhoCorasick contract
-        #[allow(clippy::cast_possible_truncation)]
-        let pattern_id = ir.literal_automaton_ids[mat.pattern().as_usize()] as u32;
+        let pattern_id = literal_pattern_ids
+            .get(mat.pattern().as_usize())
+            .copied()
+            .ok_or_else(|| {
+                Error::PatternCompilationFailed {
+                    reason: format!(
+                        "overlapping literal mapping missing for automaton index {}. Fix: rebuild pattern set.",
+                        mat.pattern().as_usize()
+                    ),
+                }
+            })
+            .and_then(|raw_id| {
+                u32::try_from(raw_id).map_err(|_| Error::PatternCompilationFailed {
+                    reason: "literal pattern ID exceeds u32::MAX. Fix: rebuild the pattern set."
+                        .to_string(),
+                })
+            })?;
         // SAFETY: mat.start() < data.len() which is validated <= u32::MAX by check_input_size
         #[allow(clippy::cast_possible_truncation)]
         let start = mat.start() as u32;

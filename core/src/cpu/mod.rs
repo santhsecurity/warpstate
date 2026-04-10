@@ -161,7 +161,7 @@ impl<'a> CachedScanner<'a> {
         if should_use_hash_scanner(ir) {
             return Ok(Self {
                 inner: CachedScannerInner::Hash {
-                    scanner: HashScanner::build(ir),
+                    scanner: HashScanner::build(ir)?,
                 },
             });
         }

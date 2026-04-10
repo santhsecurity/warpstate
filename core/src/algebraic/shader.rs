@@ -161,3 +161,37 @@ fn extract_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 }}"#
     )
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_shader_has_transition_bounds() {
+        let source = generate_map_shader();
+        assert!(
+            source.contains("arrayLength(&transition_table)"),
+            "map shader must guard transition_table indexing"
+        );
+        assert!(source.contains("0x40000000u"));
+    }
+
+    #[test]
+    fn scan_shader_has_intermediate_bounds() {
+        let source = generate_scan_shader();
+        assert!(
+            source.contains("intermediate < uniforms.state_count"),
+            "scan shader must guard func_table composition indexing"
+        );
+    }
+
+    #[test]
+    fn extract_shader_guards_match_list_pointers() {
+        let source = generate_extract_shader();
+        assert!(
+            source.contains("arrayLength(&match_list_pointers)"),
+            "extract shader must guard match_list_pointers indexing"
+        );
+    }
+}

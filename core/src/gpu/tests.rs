@@ -632,12 +632,13 @@ fn gpu_compute_workgroups_respects_limits() {
             block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
         {
             let max = device.limits().max_compute_workgroups_per_dimension;
-            // Input that fits exactly at the limit
-            let ok_input = max * shader::WORKGROUP_SIZE;
+            let max_x = max.min(65_535);
+            // Input that fits exactly at the 2D limit
+            let ok_input = max_x * max * shader::WORKGROUP_SIZE;
             assert!(dispatch::compute_workgroups(&device, ok_input).is_ok());
 
-            // Input that exceeds the limit by one workgroup
-            let bad_input = ok_input + 1;
+            // Input that exceeds the 2D limit by one workgroup
+            let bad_input = ok_input + shader::WORKGROUP_SIZE;
             let result = dispatch::compute_workgroups(&device, bad_input);
             assert!(
                 matches!(result, Err(Error::GpuDeviceError { .. })),
@@ -849,4 +850,31 @@ fn gpu_is_device_lost_error_ignores_other_errors() {
         max_bytes: 512,
     };
     assert!(!super::is_recoverable_gpu_error(&err));
+}
+
+
+#[test]
+fn gpu_compute_workgroups_2d_when_needed() {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    if let Some(adapter) = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+    {
+        if let Ok((device, _)) =
+            block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
+        {
+            let max = device.limits().max_compute_workgroups_per_dimension;
+            let max_x = max.min(65_535);
+
+            // Small input should be 1D
+            let small = dispatch::compute_workgroups(&device, 1024).unwrap();
+            assert_eq!(small.y, 1, "small inputs must use 1D dispatch");
+
+            // Large input that exceeds max_x should spill to 2D
+            let large_input = (max_x + 1) * shader::WORKGROUP_SIZE;
+            let large = dispatch::compute_workgroups(&device, large_input).unwrap();
+            assert!(
+                large.y > 1 || large.x <= max_x,
+                "inputs exceeding max_x must use 2D dispatch or fit within max_x"
+            );
+        }
+    }
 }

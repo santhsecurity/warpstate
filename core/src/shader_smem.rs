@@ -344,4 +344,42 @@ mod tests {
         assert!(!source.contains("load_table_into_smem"));
         assert!(source.contains("transition_table_unused"));
     }
+
+    #[test]
+    fn smem_shader_no_unconditional_status_ok() {
+        let source = generate_regex_dfa_smem_shader();
+        // The race-fix removes the unconditional atomicStore(STATUS_OK) by thread (0,0).
+        assert!(
+            !source.contains("atomicStore(&match_count[2], STATUS_OK)"),
+            "shader must not unconditionally overwrite status — CPU initializes it"
+        );
+    }
+
+    #[test]
+    fn smem_shader_checks_table_size() {
+        let source = generate_regex_dfa_smem_shader();
+        assert!(
+            source.contains("smem_idx >= uniforms.table_size"),
+            "SMEM index must be validated against actual table size, not just MAX_SMEM_ENTRIES"
+        );
+    }
+
+    #[test]
+    fn smem_shader_eoi_uses_input_len() {
+        let source = generate_regex_dfa_smem_shader();
+        assert!(
+            source.contains("select(uniforms.input_len,"),
+            "EOI match end position must use actual input_len, not end_limit"
+        );
+    }
+
+    #[test]
+    fn smem_specialized_transition_has_bounds_check() {
+        let source = generate_specialized_shader(&[1, 2, 3, 4], 2);
+        assert!(
+            source.contains("idx >= __TRANS_LEN__u"),
+            "specialized transition_at must guard against OOB"
+        );
+        assert!(source.contains("return FLAG_DEAD;"));
+    }
 }

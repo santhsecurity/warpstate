@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use crate::pattern::PatternIR;
-use crate::Match;
+use crate::{error::Error, Match};
 
 use std::collections::BTreeMap;
 
@@ -58,19 +58,54 @@ impl LengthGroupAligned {
         patterns: Vec<(u32, usize)>,
         offsets: &[(u32, u32)],
         packed_bytes: &[u8],
-    ) -> Self {
+    ) -> crate::error::Result<Self> {
         // 4x capacity keeps load factor ≤25%. Linear probing degrades at >50%
         // due to clustering — at 25% the expected probe length is ~1.17, effectively O(1).
         // For 24,736 IWF hashes this uses 128KB of table — fits in L2 cache.
-        let table_size = (patterns.len().saturating_mul(4).max(1)).next_power_of_two();
+        let mut table_size = patterns
+            .len()
+            .checked_mul(4)
+            .filter(|v| *v > 0)
+            .unwrap_or(1);
+        table_size = table_size.next_power_of_two();
+
+        // Prevent unbounded table growth for very large literal sets.
+        if table_size > (1 << 28) {
+            return Err(Error::PatternCompilationFailed {
+                reason: format!(
+                    "literal hash table would be too large ({table_size} entries). Fix: rebuild the pattern set with fewer literals."
+                ),
+            });
+        }
         let mask = table_size - 1;
         let mut table = vec![HashEntry::empty(); table_size];
 
         for (index, &(_pattern_id, literal_index)) in patterns.iter().enumerate() {
             let (start_u32, len_u32) = offsets[literal_index];
-            let start = start_u32 as usize;
-            let end = start + len_u32 as usize;
+            let start = usize::try_from(start_u32).map_err(|_| Error::PatternCompilationFailed {
+                reason: "literal hash table literal offset does not fit in usize. Fix: rebuild the pattern set."
+                    .to_string(),
+            })?;
+            let length = usize::try_from(len_u32).map_err(|_| Error::PatternCompilationFailed {
+                reason: "literal hash table literal length does not fit in usize. Fix: rebuild the pattern set."
+                    .to_string(),
+            })?;
+            let end = start
+                .checked_add(length)
+                .ok_or_else(|| Error::PatternCompilationFailed {
+                    reason: format!(
+                        "literal hash table literal #{index} offset overflow. Fix: rebuild the pattern set."
+                    ),
+                })?;
             let hash = compute_fnv1a(&packed_bytes[start..end]);
+            let pattern_index = u32::try_from(index).map_err(|_| {
+                Error::PatternCompilationFailed {
+                    reason: format!(
+                        "literal hash table has more than u32::MAX patterns in a single length group. Fix: rebuild the pattern set."
+                    ),
+                }
+            })?;
+            let mut inserted = false;
             for probe in 0..table_size {
                 let slot = (hash as usize).wrapping_add(probe) & mask;
                 if table[slot].occupied != 0 {
@@ -78,19 +113,26 @@ impl LengthGroupAligned {
                 }
                 table[slot] = HashEntry {
                     hash,
-                    pattern_index: index as u32,
+                    pattern_index,
                     occupied: 1,
                 };
+                inserted = true;
                 break;
+            }
+            if !inserted {
+                return Err(Error::PatternCompilationFailed {
+                    reason: "literal hash table is full; reduce group load factor and rebuild the pattern set."
+                        .to_string(),
+                });
             }
         }
 
-        Self {
+        Ok(Self {
             length,
             table,
             mask,
             patterns,
-        }
+        })
     }
 
     /// Find all matching patterns at a given position in the data.
@@ -173,24 +215,73 @@ impl HashScanner {
     /// Build a per-length hash table layout from compiled literals.
     ///
     /// Construction is `O(pattern_count)`.
-    pub fn build(ir: &PatternIR) -> Self {
-        let literal_count = ir.offsets.len().min(ir.literal_automaton_ids.len());
+    pub fn build(ir: &PatternIR) -> crate::error::Result<Self> {
+        if ir.offsets.len() != ir.literal_automaton_ids.len() {
+            return Err(Error::PatternCompilationFailed {
+                reason: "literal hash scanner metadata length mismatch. Fix: rebuild the pattern set.".to_string(),
+            });
+        }
+
+        let literal_count = ir.offsets.len();
         let packed_bytes: Arc<[u8]> = Arc::from(ir.packed_bytes.clone());
         let offsets: Arc<[(u32, u32)]> = Arc::from(ir.offsets.clone());
         let mut grouped = BTreeMap::<usize, Vec<(u32, usize)>>::new();
 
         for literal_index in 0..literal_count {
-            let pattern_id = ir.literal_automaton_ids[literal_index] as u32;
-            let (start_u32, len_u32) = offsets[literal_index];
+            let pattern_id = u32::try_from(ir.literal_automaton_ids[literal_index]).map_err(|_| {
+                Error::PatternCompilationFailed {
+                    reason: format!(
+                        "hash scanner literal pattern ID {} exceeds u32::MAX. Fix: rebuild the pattern set.",
+                        ir.literal_automaton_ids[literal_index]
+                    ),
+                }
+            })?;
+
+            let (start_u32, len_u32) = *offsets
+                .get(literal_index)
+                .ok_or_else(|| Error::PatternCompilationFailed {
+                    reason: format!(
+                        "hash scanner missing literal offset at index {literal_index}. Fix: rebuild the pattern set."
+                    ),
+                })?;
+
+            let start = usize::try_from(start_u32).map_err(|_| {
+                Error::PatternCompilationFailed {
+                    reason: "hash scanner literal start offset does not fit in usize. Fix: rebuild the pattern set.".to_string(),
+                }
+            })?;
+            let length = usize::try_from(len_u32).map_err(|_| {
+                Error::PatternCompilationFailed {
+                    reason: "hash scanner literal length does not fit in usize. Fix: rebuild the pattern set.".to_string(),
+                }
+            })?;
             let start = start_u32 as usize;
             let length = len_u32 as usize;
 
+            if length == 0 {
+                return Err(Error::PatternCompilationFailed {
+                    reason: format!(
+                        "hash scanner literal #{literal_index} has zero length. Fix: rebuild the pattern set."
+                    ),
+                });
+            }
+
             let end = match start.checked_add(length) {
                 Some(end) => end,
-                None => continue,
+                None => {
+                    return Err(Error::PatternCompilationFailed {
+                        reason: format!(
+                            "hash scanner literal #{literal_index} offset overflow. Fix: rebuild the pattern set."
+                        ),
+                    })
+                }
             };
             if length == 0 || end > packed_bytes.len() {
-                continue;
+                return Err(Error::PatternCompilationFailed {
+                    reason: format!(
+                        "hash scanner literal #{literal_index} references bytes outside the packed buffer. Fix: rebuild the pattern set."
+                    ),
+                });
             }
 
             grouped
@@ -201,14 +292,16 @@ impl HashScanner {
 
         let groups = grouped
             .into_iter()
-            .map(|(length, patterns)| LengthGroup::new(length, patterns, &offsets, &packed_bytes))
-            .collect();
+            .map(|(length, patterns)| {
+                LengthGroup::new(length, patterns, &offsets, &packed_bytes)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
-        Self {
+        Ok(Self {
             packed_bytes,
             offsets,
             groups,
-        }
+        })
     }
 
     /// Scan for non-overlapping literal matches.
@@ -438,7 +531,7 @@ mod tests {
             .unwrap();
         let data = b"xxneedlexxsecretxxtoken";
 
-        let scanner = HashScanner::build(patterns.ir());
+        let scanner = HashScanner::build(patterns.ir()).unwrap();
         assert_eq!(scanner.scan(data), patterns.scan(data).unwrap());
     }
 }
@@ -457,7 +550,7 @@ mod adversarial_tests {
             .unwrap();
         let data = b"xxdupxx";
 
-        let scanner = HashScanner::build(patterns.ir());
+        let scanner = HashScanner::build(patterns.ir()).unwrap();
         let hash_matches = scanner.scan(data);
 
         // HashScanner reports each duplicate pattern separately (2 matches),
@@ -483,7 +576,7 @@ mod adversarial_tests {
             .build()
             .unwrap();
 
-        let scanner = HashScanner::build(patterns.ir());
+        let scanner = HashScanner::build(patterns.ir()).unwrap();
 
         let test_inputs = [
             b"xxneedlexxsecretxxtoken".as_slice(),
@@ -514,7 +607,7 @@ mod adversarial_tests {
     fn scan_with_early_termination() {
         let patterns = PatternSet::builder().literal("a").build().unwrap();
 
-        let scanner = HashScanner::build(patterns.ir());
+        let scanner = HashScanner::build(patterns.ir()).unwrap();
         let data = b"aaaa";
 
         let mut count = 0;
