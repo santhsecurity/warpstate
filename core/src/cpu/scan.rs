@@ -306,63 +306,10 @@ fn scan_literals_overlapping(
     data: &[u8],
     out_matches: &mut [Match],
 ) -> Result<usize> {
-    if ir.literal_automaton.is_none() {
+    // Use pre-built overlapping AC automaton — eliminates per-scan AC construction.
+    let Some(ac) = &ir.literal_automaton_overlapping else {
         return Ok(0);
-    }
-
-    // Rebuild patterns in the exact order used by the primary Aho-Corasick automaton
-    // and preserve the corresponding original pattern IDs.
-    let mut literal_patterns: Vec<&[u8]> = Vec::with_capacity(ir.literal_automaton_ids.len());
-    let mut literal_pattern_ids = Vec::with_capacity(ir.literal_automaton_ids.len());
-    for matcher in &ir.matchers {
-        let CompiledPatternKind::Literal { literal_index } = matcher.kind else {
-            continue;
-        };
-        let (start_u32, len_u32) = *ir.offsets.get(literal_index).ok_or_else(|| {
-            Error::PatternCompilationFailed {
-                reason:
-                    "literal automaton mapping references an invalid literal index. Fix: rebuild the pattern set."
-                        .to_string(),
-            }
-        })?;
-        let pattern_id = ir.literal_automaton_ids.get(literal_index).copied().ok_or_else(|| {
-            Error::PatternCompilationFailed {
-                reason:
-                    "literal automaton IDs are missing entries. Fix: rebuild the pattern set."
-                        .to_string(),
-            }
-        })?;
-        let start = usize::try_from(start_u32).map_err(|_| Error::PatternCompilationFailed {
-            reason: "literal pattern start offset does not fit in usize. Fix: rebuild the pattern set."
-                .to_string(),
-        })?;
-        let len = usize::try_from(len_u32).map_err(|_| Error::PatternCompilationFailed {
-            reason: "literal pattern length does not fit in usize. Fix: rebuild the pattern set."
-                .to_string(),
-        })?;
-        let end = start.checked_add(len).ok_or_else(|| Error::PatternCompilationFailed {
-            reason: "literal pattern range overflow. Fix: rebuild the pattern set.".to_string(),
-        })?;
-        if end > ir.packed_bytes.len() {
-            return Err(Error::PatternCompilationFailed {
-                reason: "literal pattern references bytes outside the packed buffer. Fix: rebuild the pattern set."
-                    .to_string(),
-            });
-        }
-        literal_patterns.push(&ir.packed_bytes[start..end]);
-        literal_pattern_ids.push(pattern_id);
-    }
-    if literal_patterns.is_empty() {
-        return Ok(0);
-    }
-
-    let ac = aho_corasick::AhoCorasick::builder()
-        .match_kind(aho_corasick::MatchKind::Standard)
-        .ascii_case_insensitive(ir.case_insensitive)
-        .build(&literal_patterns)
-        .map_err(|error| Error::PatternCompilationFailed {
-            reason: error.to_string(),
-        })?;
+    };
 
     let mut count = 0;
     for mat in ac.find_overlapping_iter(data) {
@@ -372,7 +319,7 @@ fn scan_literals_overlapping(
                 max: out_matches.len().min(MAX_CPU_MATCHES),
             });
         }
-        let pattern_id = literal_pattern_ids
+        let pattern_id = ir.literal_automaton_ids
             .get(mat.pattern().as_usize())
             .copied()
             .ok_or_else(|| {

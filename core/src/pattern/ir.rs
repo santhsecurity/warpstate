@@ -18,6 +18,9 @@ pub struct PatternIR {
     pub(crate) hash_window_len: u32,
     pub(crate) literal_prefilter_table: LiteralPrefilterTable,
     pub(crate) literal_automaton: Option<aho_corasick::AhoCorasick>,
+    /// Overlapping-mode AC automaton (MatchKind::Standard) for find_overlapping_iter.
+    /// Built once at construction to avoid per-scan AC rebuild.
+    pub(crate) literal_automaton_overlapping: Option<aho_corasick::AhoCorasick>,
     pub(crate) literal_automaton_ids: Vec<usize>,
     /// True when the literal automaton uses case-insensitive matching.
     /// Disables the memchr fast path (memchr doesn't support case folding).

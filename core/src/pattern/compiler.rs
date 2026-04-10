@@ -248,6 +248,18 @@ impl PatternSetBuilder {
             )
         };
 
+        // Build overlapping-mode AC automaton for find_overlapping_iter scans.
+        // MatchKind::Standard is required for overlapping iteration.
+        let literal_automaton_overlapping = if literal_patterns.is_empty() {
+            None
+        } else {
+            aho_corasick::AhoCorasick::builder()
+                .match_kind(aho_corasick::MatchKind::Standard)
+                .ascii_case_insensitive(self.ascii_case_insensitive)
+                .build(&literal_patterns)
+                .ok()
+        };
+
         let literal_prefilter_table =
             LiteralPrefilterTable::build(&offsets, &literal_hashes, hash_window_len).map_err(
                 |reason| Error::PatternCompilationFailed {
@@ -281,6 +293,7 @@ impl PatternSetBuilder {
             hash_window_len,
             literal_prefilter_table,
             literal_automaton,
+            literal_automaton_overlapping,
             case_insensitive: self.ascii_case_insensitive,
             literal_automaton_ids,
             fast_ci_regex,
