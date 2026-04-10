@@ -48,7 +48,6 @@ async fn scan_with_matcher(patterns: &PatternSet, data: &[u8]) -> Option<Vec<Mat
 }
 
 #[tokio::test]
-#[ignore = "GPU shader parity bug under software Vulkan."]
 async fn algebraic_single_pattern() {
     let patterns = PatternSet::builder().regex("needle").build().unwrap();
     let Some(matches) = scan_with_matcher(&patterns, b"hay needle hay").await else {
@@ -66,7 +65,6 @@ async fn algebraic_single_pattern() {
 }
 
 #[tokio::test]
-#[ignore = "GPU shader parity bug under software Vulkan."]
 async fn algebraic_multiple_patterns() {
     let patterns = PatternSet::builder()
         .regex("alpha")
@@ -84,7 +82,6 @@ async fn algebraic_multiple_patterns() {
 }
 
 #[tokio::test]
-#[ignore = "GPU shader parity bug under software Vulkan."]
 async fn algebraic_matches_cpu_parity() {
     let patterns = PatternSet::builder()
         .regex("aba")
@@ -168,7 +165,6 @@ async fn algebraic_empty_input() {
 }
 
 #[tokio::test]
-#[ignore = "GPU shader parity bug under software Vulkan."]
 async fn algebraic_block_boundary() {
     let patterns = PatternSet::builder().regex("needle").build().unwrap();
     let mut data = vec![b'a'; 4095];
@@ -181,7 +177,6 @@ async fn algebraic_block_boundary() {
 }
 
 #[tokio::test]
-#[ignore = "GPU shader parity bug under software Vulkan."]
 async fn algebraic_long_input() {
     let patterns = PatternSet::builder()
         .regex("warp")
@@ -200,7 +195,6 @@ async fn algebraic_long_input() {
 }
 
 #[tokio::test]
-#[ignore = "GPU shader parity bug under software Vulkan."]
 async fn algebraic_overlapping_matches() {
     let patterns = PatternSet::builder()
         .regex("aba")

@@ -120,9 +120,7 @@ fn main(
                 let count = atomicAdd(&match_count[0], 1u);
                 if count < uniforms.max_matches {
                     let pat_id = match_lists[match_ptr + 1u + m];
-                    let pat_len = pattern_lengths[pat_id];
-                    let end_pos = select(i + 1u, min(pos + pat_len, uniforms.input_len), pat_len != 0u);
-                    match_output[count] = vec4<u32>(pat_id, pos, end_pos, 0u);
+                    match_output[count] = vec4<u32>(pat_id, pos, i, 0u);
                 } else {
                     atomicStore(&match_count[1], 1u);
                 }
@@ -132,6 +130,7 @@ fn main(
         if (state & FLAG_DEAD) != 0u {
             break;
         }
+
     }
 
     if (state & FLAG_DEAD) == 0u {
@@ -152,9 +151,7 @@ fn main(
                 let count = atomicAdd(&match_count[0], 1u);
                 if count < uniforms.max_matches {
                     let pat_id = match_lists[match_ptr + 1u + m];
-                    let pat_len = pattern_lengths[pat_id];
-                    let end_pos = select(uniforms.input_len, min(pos + pat_len, uniforms.input_len), pat_len != 0u);
-                    match_output[count] = vec4<u32>(pat_id, pos, end_pos, 0u);
+                    match_output[count] = vec4<u32>(pat_id, pos, uniforms.input_len, 0u);
                 } else {
                     atomicStore(&match_count[1], 1u);
                 }
@@ -207,9 +204,7 @@ fn main(
                 let count = atomicAdd(&match_count[0], 1u);
                 if count < uniforms.max_matches {
                     let pat_id = match_lists[match_ptr + 1u + m];
-                    let pat_len = pattern_lengths[pat_id];
-                    let end_pos = select(i + 1u, min(pos + pat_len, uniforms.input_len), pat_len != 0u);
-                    match_output[count] = vec4<u32>(pat_id, pos, end_pos, 0u);
+                    match_output[count] = vec4<u32>(pat_id, pos, i, 0u);
                 } else {
                     atomicStore(&match_count[1], 1u);
                 }
@@ -219,6 +214,7 @@ fn main(
         if (state & FLAG_DEAD) != 0u {
             break;
         }
+
     }
 
     if (state & FLAG_DEAD) == 0u {
@@ -234,9 +230,7 @@ fn main(
                 let count = atomicAdd(&match_count[0], 1u);
                 if count < uniforms.max_matches {
                     let pat_id = match_lists[match_ptr + 1u + m];
-                    let pat_len = pattern_lengths[pat_id];
-                    let end_pos = select(uniforms.input_len, min(pos + pat_len, uniforms.input_len), pat_len != 0u);
-                    match_output[count] = vec4<u32>(pat_id, pos, end_pos, 0u);
+                    match_output[count] = vec4<u32>(pat_id, pos, uniforms.input_len, 0u);
                 } else {
                     atomicStore(&match_count[1], 1u);
                 }
@@ -363,7 +357,7 @@ mod tests {
     fn smem_shader_eoi_uses_input_len() {
         let source = generate_regex_dfa_smem_shader();
         assert!(
-            source.contains("select(uniforms.input_len,"),
+            source.contains("vec4<u32>(pat_id, pos, uniforms.input_len, 0u)"),
             "EOI match end position must use actual input_len, not end_limit"
         );
     }

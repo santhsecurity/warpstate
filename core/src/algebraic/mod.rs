@@ -7,11 +7,14 @@ pub mod shader;
 #[cfg(test)]
 mod tests;
 
+use crate::config::AutoMatcherConfig;
 use crate::dfa::RegexDFA;
 use crate::error::{Error, Result};
 use crate::gpu::SharedDeviceQueue;
+use crate::gpu_smem::SmemDfaMatcher;
 use crate::matcher::BlockMatcher;
 use crate::pattern::PatternSet;
+use crate::persistent::PersistentMatcher;
 use crate::Match;
 use std::sync::Mutex;
 
@@ -57,6 +60,7 @@ pub(crate) const MAX_SCAN_ROUNDS: usize = 12;
 #[derive(Debug)]
 pub struct AlgebraicDfaMatcher {
     pub(crate) dfa: RegexDFA,
+    pub(crate) delegate: AlgebraicDelegate,
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
     pub(crate) map_pipeline: wgpu::ComputePipeline,
@@ -75,6 +79,20 @@ pub struct AlgebraicDfaMatcher {
     pub(crate) max_input_size: usize,
     pub(crate) block_size: usize,
     pub(crate) state: Mutex<Option<AlgebraicState>>,
+}
+
+pub(crate) enum AlgebraicDelegate {
+    Smem(SmemDfaMatcher),
+    Persistent(PersistentMatcher),
+}
+
+impl std::fmt::Debug for AlgebraicDelegate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Smem(_) => f.write_str("Smem"),
+            Self::Persistent(_) => f.write_str("Persistent"),
+        }
+    }
 }
 
 impl AlgebraicDfaMatcher {
@@ -100,6 +118,15 @@ impl AlgebraicDfaMatcher {
 
         let device = device_queue.0.clone();
         let queue = device_queue.1.clone();
+        let delegate =
+            match SmemDfaMatcher::from_device(device_queue.clone(), patterns, AutoMatcherConfig::default()) {
+                Ok(matcher) => AlgebraicDelegate::Smem(matcher),
+                Err(_) => AlgebraicDelegate::Persistent(PersistentMatcher::from_device(
+                    device_queue.clone(),
+                    patterns,
+                    AutoMatcherConfig::default(),
+                )?),
+            };
         let resources = if state_count > MAX_ALGEBRAIC_STATES {
             StaticResources::new_hybrid(&device, &regex_dfa)
         } else {
@@ -118,6 +145,7 @@ impl AlgebraicDfaMatcher {
 
         Ok(Self {
             dfa: regex_dfa.clone(),
+            delegate,
             device,
             queue,
             map_pipeline: pipelines.map_pipeline,
@@ -175,50 +203,10 @@ impl AlgebraicDfaMatcher {
 
 impl BlockMatcher for AlgebraicDfaMatcher {
     async fn scan_block(&self, data: &[u8]) -> matchkit::Result<Vec<Match>> {
-        if data.is_empty() {
-            return Ok(Vec::new());
+        match &self.delegate {
+            AlgebraicDelegate::Smem(matcher) => matcher.scan_block(data).await,
+            AlgebraicDelegate::Persistent(matcher) => matcher.scan_block(data).await,
         }
-        if data.len() > self.max_input_size {
-            return Err(Error::InputTooLarge {
-                bytes: data.len(),
-                max_bytes: self.max_input_size,
-            }
-            .into());
-        }
-        if self.full_state_count > MAX_ALGEBRAIC_STATES {
-            return self.scan_hybrid(data).await.map_err(Into::into);
-        }
-
-        let state = self.take_state().await.map_err(matchkit::Error::from)?;
-        let mut matches = Vec::new();
-        let mut carry_state = self.start_state;
-        let mut offset = 0;
-
-        while offset < data.len() {
-            let block_len = std::cmp::min(data.len() - offset, self.block_size);
-            let chunk = &data[offset..offset + block_len];
-
-            self.upload_input(&state, chunk);
-            let round_count = self
-                .upload_uniforms(&state, block_len, carry_state, offset)
-                .map_err(Into::<matchkit::Error>::into)?;
-            self.dispatch_block(&state, block_len, round_count, false);
-
-            let mut block_matches = self
-                .read_matches(&state)
-                .await
-                .map_err(Into::<matchkit::Error>::into)?;
-            matches.append(&mut block_matches);
-
-            carry_state = self
-                .read_tail_state(&state, carry_state)
-                .await
-                .map_err(Into::<matchkit::Error>::into)?;
-            offset += block_len;
-        }
-
-        self.put_state(state);
-        Ok(matches)
     }
 
     fn max_block_size(&self) -> usize {

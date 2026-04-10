@@ -344,9 +344,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "GPU shader parity bug under software Vulkan; requires WGSL debugging."]
     fn hash_no_false_positives() {
-        let Some(matches) = scan_or_skip(&[b"abcdef"], b"abcdeg abcdefg abcdee").unwrap() else {
+        let Some(matches) = scan_or_skip(&[b"abcdef"], b"abcdeg abcxefg abcdee").unwrap() else {
             return;
         };
         assert!(matches.is_empty());

@@ -182,7 +182,7 @@ impl SmemDfaMatcher {
                 && left.start == right.start
                 && left.end == right.end
         });
-        Ok(matches)
+        Ok(canonicalize_regex_matches(matches))
     }
 
     pub(super) async fn scan_block_impl(&self, data: &[u8]) -> Result<Vec<Match>> {
@@ -224,6 +224,49 @@ impl SmemDfaMatcher {
         }
         result
     }
+}
+
+fn canonicalize_regex_matches(mut matches: Vec<Match>) -> Vec<Match> {
+    if matches.is_empty() {
+        return matches;
+    }
+
+    matches.sort_unstable_by(|left, right| {
+        left.start
+            .cmp(&right.start)
+            .then_with(|| right.end.cmp(&left.end))
+            .then_with(|| left.pattern_id.cmp(&right.pattern_id))
+    });
+
+    let mut canonical = Vec::with_capacity(matches.len());
+    let mut index = 0usize;
+    let mut cursor_end = 0u32;
+
+    while index < matches.len() {
+        let start = matches[index].start;
+        if start < cursor_end {
+            index += 1;
+            continue;
+        }
+
+        let mut max_end = matches[index].end;
+        let mut group_end = index + 1;
+        while group_end < matches.len() && matches[group_end].start == start {
+            max_end = max_end.max(matches[group_end].end);
+            group_end += 1;
+        }
+
+        for candidate in &matches[index..group_end] {
+            if candidate.end == max_end {
+                canonical.push(*candidate);
+            }
+        }
+
+        cursor_end = max_end;
+        index = group_end;
+    }
+
+    canonical
 }
 
 impl BlockMatcher for SmemDfaMatcher {

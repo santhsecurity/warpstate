@@ -80,10 +80,7 @@ harness = false
 
 [[test]]
 name = "break_it"
-path = "tests/break_it.rs"
-
-[lints.rust]
-dead_code = "allow"
+path = "tests/adversarial/break_it.rs"
 
 [lints.clippy]
 # Performance-critical matching engine — inline_always is intentional
@@ -104,3 +101,160 @@ missing_panics_doc = "allow"
 # Override workspace denies for internal expect() usage
 expect_used = "allow"
 module_name_repetitions = "allow"
+
+[[test]]
+name = "unit_concurrent_suite"
+path = "tests/unit/concurrent_suite.rs"
+
+[[test]]
+name = "unit_fused"
+path = "tests/unit/fused.rs"
+
+[[test]]
+name = "unit_gpu_batch"
+path = "tests/unit/gpu_batch.rs"
+
+[[test]]
+name = "unit_gpu_scale"
+path = "tests/unit/gpu_scale.rs"
+
+[[test]]
+name = "unit_gpu_scanner"
+path = "tests/unit/gpu_scanner.rs"
+
+[[test]]
+name = "unit_harness_exhaustive"
+path = "tests/unit/harness_exhaustive.rs"
+
+[[test]]
+name = "unit_harness_regex"
+path = "tests/unit/harness_regex.rs"
+
+[[test]]
+name = "unit_impossible_conditions"
+path = "tests/unit/impossible_conditions.rs"
+
+[[test]]
+name = "unit_jit_parity"
+path = "tests/unit/jit_parity.rs"
+
+[[test]]
+name = "unit_legendary_correctness"
+path = "tests/unit/legendary_correctness.rs"
+
+[[test]]
+name = "unit_legendary_jules"
+path = "tests/unit/legendary_jules.rs"
+
+[[test]]
+name = "unit_loom"
+path = "tests/unit/loom.rs"
+
+[[test]]
+name = "unit_manual_parity"
+path = "tests/unit/manual_parity.rs"
+
+[[test]]
+name = "unit_mass_pattern_samples"
+path = "tests/unit/mass_pattern_samples.rs"
+
+[[test]]
+name = "unit"
+path = "tests/unit/mod.rs"
+
+[[test]]
+name = "unit_p0_ac_automaton_false_negative"
+path = "tests/unit/p0_ac_automaton_false_negative.rs"
+
+[[test]]
+name = "unit_p0_regression_pattern_drop"
+path = "tests/unit/p0_regression_pattern_drop.rs"
+
+[[test]]
+name = "unit_parity"
+path = "tests/unit/parity.rs"
+
+[[test]]
+name = "unit_parity_suite"
+path = "tests/unit/parity_suite.rs"
+
+[[test]]
+name = "unit_regression_suite"
+path = "tests/unit/regression_suite.rs"
+
+[[test]]
+name = "unit_specialize_parity"
+path = "tests/unit/specialize_parity.rs"
+
+[[test]]
+name = "unit_structural"
+path = "tests/unit/structural.rs"
+
+[[test]]
+name = "unit_structural_suite"
+path = "tests/unit/structural_suite.rs"
+
+[[test]]
+name = "unit_test_legendary_suite"
+path = "tests/unit/test_legendary_suite.rs"
+
+[[test]]
+name = "adversarial_adversarial_audit_cpu"
+path = "tests/adversarial/adversarial_audit_cpu.rs"
+
+[[test]]
+name = "adversarial_adversarial_cpu"
+path = "tests/adversarial/adversarial_cpu.rs"
+
+[[test]]
+name = "adversarial_adversarial_exhaustive"
+path = "tests/adversarial/adversarial_exhaustive.rs"
+
+[[test]]
+name = "adversarial_adversarial_gpu"
+path = "tests/adversarial/adversarial_gpu.rs"
+
+[[test]]
+name = "adversarial_adversarial_jules"
+path = "tests/adversarial/adversarial_jules.rs"
+
+[[test]]
+name = "adversarial_adversarial_matching"
+path = "tests/adversarial/adversarial_matching.rs"
+
+[[test]]
+name = "adversarial_adversarial_pattern_set"
+path = "tests/adversarial/adversarial_pattern_set.rs"
+
+[[test]]
+name = "adversarial_adversarial_suite"
+path = "tests/adversarial/adversarial_suite.rs"
+
+[[test]]
+name = "adversarial"
+path = "tests/adversarial/mod.rs"
+
+[[test]]
+name = "integration_keyhog_integration"
+path = "tests/integration/keyhog_integration.rs"
+
+[[test]]
+name = "integration"
+path = "tests/integration/mod.rs"
+
+[[test]]
+name = "property"
+path = "tests/property/mod.rs"
+
+[[test]]
+name = "property_property_suite"
+path = "tests/property/property_suite.rs"
+
+[[test]]
+name = "property_proptest_parity"
+path = "tests/property/proptest_parity.rs"
+
+[[test]]
+name = "property_proptest_scan"
+path = "tests/property/proptest_scan.rs"
+
