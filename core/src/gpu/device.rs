@@ -20,17 +20,16 @@ impl GpuBufferPool {
         size: u64,
         usage: wgpu::BufferUsages,
     ) -> wgpu::Buffer {
-        let size_usize = size as usize;
-        let size_class = size_usize
+        let size_class = size
             .checked_next_power_of_two()
-            .unwrap_or(size_usize)
-            .max(64) as u64;
+            .unwrap_or(size)
+            .max(64);
 
         {
-            let mut pool = self
-                .available
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut pool = match self.available.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
             if let Some(idx) = pool
                 .iter()
                 .position(|(u, s, _)| *u == usage && *s >= size_class)
@@ -53,10 +52,10 @@ impl GpuBufferPool {
         const MAX_POOL_SIZE: usize = 64;
 
         let size = buffer.size();
-        let mut pool = self
-            .available
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut pool = match self.available.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
 
         if pool.len() >= MAX_POOL_SIZE {
             // Evict the smallest buffer to keep large allocations hot.
@@ -71,6 +70,18 @@ impl GpuBufferPool {
             }
         }
         pool.push((usage, size, buffer));
+    }
+}
+
+impl Drop for GpuBufferPool {
+    fn drop(&mut self) {
+        let mut pool = match self.available.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        for (_, _, buf) in pool.drain(..) {
+            buf.destroy();
+        }
     }
 }
 

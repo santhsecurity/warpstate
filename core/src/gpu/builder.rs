@@ -31,6 +31,14 @@ pub(crate) fn build_literal_gpu(
         })
         .collect();
 
+    let pattern_count = patterns.ir().offsets.len().try_into().map_err(|_| {
+        Error::PatternSetTooLarge {
+            patterns: patterns.len(),
+            bytes: patterns.ir().packed_bytes.len(),
+            max_bytes: u32::MAX as usize,
+        }
+    })?;
+
     let pattern_bytes_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("warpstate literal pattern bytes"),
         contents: crate::gpu::device::packed_u32_as_bytes(&packed_bytes),
@@ -115,13 +123,7 @@ pub(crate) fn build_literal_gpu(
         prefilter_prefix_meta_buf,
         prefilter_bucket_ranges_buf,
         prefilter_entries_buf,
-        pattern_count: patterns.ir().offsets.len().try_into().map_err(|_| {
-            Error::PatternSetTooLarge {
-                patterns: patterns.len(),
-                bytes: patterns.ir().packed_bytes.len(),
-                max_bytes: u32::MAX as usize,
-            }
-        })?,
+        pattern_count,
         pattern_ids,
         hash_window_len: patterns.ir().hash_window_len,
     }))

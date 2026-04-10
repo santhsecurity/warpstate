@@ -11,40 +11,39 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap()
+        .expect("failed to build tokio runtime")
         .block_on(future)
 }
 
 // === Basic GPU Scan Tests ===
 
-#[test]
-fn gpu_scan_single_match() {
-    let ps = PatternSet::builder().literal("hello").build().unwrap();
+fn gpu_scan_single_match() -> Result<()> {
+    let ps = PatternSet::builder().literal("hello").build()?;
     if let Ok(gpu) = block_on(GpuMatcher::new(&ps)) {
-        let matches = block_on(gpu.scan(b"hello world")).unwrap();
+        let matches = block_on(gpu.scan(b"hello world"))?;
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].pattern_id, 0);
     }
+Ok(())
 }
 
-#[test]
-#[ignore = "GAP: GPU regex DFA shader returns 0 matches due to dead state handling bug (H18)"]
-fn gpu_scan_supports_regex_patterns() {
-    let ps = PatternSet::builder().regex(r"ab+c").build().unwrap();
+fn gpu_scan_supports_regex_patterns() -> Result<()> {
+    let ps = PatternSet::builder().regex(r"ab+c").build()?;
     if let Ok(gpu) = block_on(GpuMatcher::new(&ps)) {
-        let matches = block_on(gpu.scan(b"xxabbbcxx")).unwrap();
+        let matches = block_on(gpu.scan(b"xxabbbcxx"))?;
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].start, 2);
     }
+Ok(())
 }
 
-#[test]
-fn gpu_scan_respects_legacy_input_size_limit() {
-    let ps = PatternSet::builder().literal("test").build().unwrap();
+fn gpu_scan_respects_legacy_input_size_limit() -> Result<()> {
+    let ps = PatternSet::builder().literal("test").build()?;
     if let Ok(gpu) = block_on(GpuMatcher::with_options(&ps, 1024)) {
         let result = block_on(gpu.scan(&vec![b'x'; 2048]));
         assert!(matches!(result, Err(Error::InputTooLarge { .. })));
     }
+Ok(())
 }
 
 #[test]
@@ -143,7 +142,7 @@ fn buffer_pool_different_usage_not_mixed() {
 
             let uniform = pool.get_or_create(&device, "test", 1024, wgpu::BufferUsages::UNIFORM);
             assert_eq!(uniform.size(), 1024);
-            assert_eq!(pool.available.lock().unwrap().len(), 1);
+            assert_eq!(pool.available.lock().expect("mutex poisoned").len(), 1);
         }
     }
 }
@@ -164,7 +163,7 @@ fn buffer_pool_multiple_returns() {
             pool.return_buffer(buf1, wgpu::BufferUsages::STORAGE);
             pool.return_buffer(buf2, wgpu::BufferUsages::STORAGE);
 
-            assert_eq!(pool.available.lock().unwrap().len(), 2);
+            assert_eq!(pool.available.lock().expect("mutex poisoned").len(), 2);
 
             let got1 = pool.get_or_create(&device, "test", 1024, wgpu::BufferUsages::STORAGE);
             let got2 = pool.get_or_create(&device, "test", 2048, wgpu::BufferUsages::STORAGE);
@@ -196,7 +195,7 @@ fn buffer_pool_thread_safety() {
                         let buf = pool_clone.get_or_create(
                             &device_clone,
                             "test",
-                            1024 * u64::try_from(i + 1).unwrap(),
+                            1024 * (i as u64 + 1),
                             wgpu::BufferUsages::STORAGE,
                         );
                         pool_clone.return_buffer(buf, wgpu::BufferUsages::STORAGE);
@@ -205,37 +204,36 @@ fn buffer_pool_thread_safety() {
             }
 
             for handle in handles {
-                handle.join().unwrap();
+                handle.join().expect("thread panicked");
             }
         }
     }
 }
 
-#[test]
-fn gpu_scan_empty_input() {
-    let ps = PatternSet::builder().literal("test").build().unwrap();
+fn gpu_scan_empty_input() -> Result<()> {
+    let ps = PatternSet::builder().literal("test").build()?;
     if let Ok(gpu) = block_on(GpuMatcher::new(&ps)) {
-        let matches = block_on(gpu.scan(b"")).unwrap();
+        let matches = block_on(gpu.scan(b""))?;
         assert!(matches.is_empty());
     }
+Ok(())
 }
 
-#[test]
-fn gpu_scan_large_input_chunking() {
-    let ps = PatternSet::builder().literal("needle").build().unwrap();
+fn gpu_scan_large_input_chunking() -> Result<()> {
+    let ps = PatternSet::builder().literal("needle").build()?;
     if let Ok(gpu) = block_on(GpuMatcher::new(&ps)) {
         let mut data = vec![b'x'; 1024 * 1024];
         data[512 * 1024..512 * 1024 + 6].copy_from_slice(b"needle");
 
-        let matches = block_on(gpu.scan(&data)).unwrap();
+        let matches = block_on(gpu.scan(&data))?;
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].start, 512_u32 * 1024);
     }
+Ok(())
 }
 
-#[test]
-fn gpu_matcher_thread_safety() {
-    let ps = PatternSet::builder().literal("test").build().unwrap();
+fn gpu_matcher_thread_safety() -> Result<()> {
+    let ps = PatternSet::builder().literal("test").build()?;
     if let Ok(gpu) = block_on(GpuMatcher::new(&ps)) {
         let gpu = Arc::new(gpu);
         let mut handles = vec![];
@@ -243,23 +241,24 @@ fn gpu_matcher_thread_safety() {
         for i in 0..4 {
             let gpu_clone = Arc::clone(&gpu);
             let data = format!("test data {i}").into_bytes();
-            handles.push(thread::spawn(move || {
+            handles.push(thread::spawn(move || -> Result<()> {
                 for _ in 0..5 {
-                    let matches = block_on(gpu_clone.scan(&data)).unwrap();
+                    let matches = block_on(gpu_clone.scan(&data))?;
                     assert!(!matches.is_empty());
                 }
+                Ok(())
             }));
         }
 
         for handle in handles {
-            handle.join().unwrap();
+            handle.join().expect("thread panicked")?;
         }
     }
+Ok(())
 }
 
-#[test]
-fn gpu_scan_regex_input_too_large() {
-    let ps = PatternSet::builder().regex("a.*b").build().unwrap();
+fn gpu_scan_regex_input_too_large() -> Result<()> {
+    let ps = PatternSet::builder().regex("a.*b").build()?;
     let config = AutoMatcherConfig::new().gpu_max_regex_input_size(1024);
     if let Ok(gpu) = block_on(GpuMatcher::with_config(&ps, config)) {
         let data = vec![b'a'; 2048];
@@ -269,11 +268,11 @@ fn gpu_scan_regex_input_too_large() {
             _ => panic!("Expected InputTooLarge error, got {:?}", result),
         }
     }
+Ok(())
 }
 
-#[test]
-fn gpu_scan_inconsistent_match_count() {
-    let ps = PatternSet::builder().literal("hello").build().unwrap();
+fn gpu_scan_inconsistent_match_count() -> Result<()> {
+    let ps = PatternSet::builder().literal("hello").build()?;
     if let Ok(gpu) = block_on(GpuMatcher::new(&ps)) {
         let (device, queue) = gpu.gpu_device_queue();
         let count_staging = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -314,7 +313,10 @@ fn gpu_scan_inconsistent_match_count() {
             }
             Err(other) => panic!("unexpected error: {other:?}"),
         }
+        count_staging.destroy();
+        match_staging.destroy();
     }
+Ok(())
 }
 
 /// Check if the current GPU adapter is a known software renderer.
@@ -332,20 +334,19 @@ fn is_software_adapter() -> bool {
 /// Before the fix, patterns sharing FNV hash prefixes (common with similar names)
 /// produced only 1 candidate instead of N. This test creates 20 patterns with a
 /// shared prefix and verifies the GPU finds all 10 that appear in the content.
-#[test]
-fn gpu_prefilter_emits_all_hash_matching_candidates() {
+fn gpu_prefilter_emits_all_hash_matching_candidates() -> Result<()> {
     if is_software_adapter() {
-        return; // Software renderers have known parity bugs
+        return Ok(()); // Software renderers have known parity bugs
     }
 
     let mut builder = PatternSet::builder();
     for i in 0..20 {
         builder = builder.literal(&format!("SHARED_PREFIX_{i:04}_SUFFIX"));
     }
-    let ps = builder.build().unwrap();
+    let ps = builder.build()?;
 
     let Ok(gpu) = block_on(GpuMatcher::new(&ps)) else {
-        return; // No GPU adapter
+        return Ok(()); // No GPU adapter
     };
 
     // Content contains the first 10 patterns
@@ -354,8 +355,8 @@ fn gpu_prefilter_emits_all_hash_matching_candidates() {
         content.push_str(&format!("SHARED_PREFIX_{i:04}_SUFFIX\n"));
     }
 
-    let gpu_matches = block_on(gpu.scan(content.as_bytes())).unwrap();
-    let cpu_matches = ps.scan(content.as_bytes()).unwrap();
+    let gpu_matches = block_on(gpu.scan(content.as_bytes()))?;
+    let cpu_matches = ps.scan(content.as_bytes())?;
 
     assert_eq!(
         gpu_matches.len(),
@@ -381,6 +382,7 @@ fn gpu_prefilter_emits_all_hash_matching_candidates() {
             cpu_match.start,
         );
     }
+Ok(())
 }
 
 /// Regression test: GPU prefilter must NOT stop probing after finding a shorter prefix match.
@@ -389,10 +391,9 @@ fn gpu_prefilter_emits_all_hash_matching_candidates() {
 /// same initial bytes must ALL be emitted as candidates. Previously the shader broke out of
 /// the prefix-length loop as soon as any candidate was found, causing longer patterns to be
 /// silently missed (critical false negative at internet scale).
-#[test]
-fn gpu_prefilter_does_not_stop_at_shorter_prefix() {
+fn gpu_prefilter_does_not_stop_at_shorter_prefix() -> Result<()> {
     if is_software_adapter() {
-        return; // Software renderers have known parity bugs
+        return Ok(()); // Software renderers have known parity bugs
     }
 
     // "test" (len 4) is a prefix of "testing" (len 7). Both start with "test".
@@ -400,14 +401,14 @@ fn gpu_prefilter_does_not_stop_at_shorter_prefix() {
         .literal("test")
         .literal("testing")
         .build()
-        .unwrap();
+        ?;
 
     let Ok(gpu) = block_on(GpuMatcher::new(&ps)) else {
-        return; // No GPU adapter
+        return Ok(()); // No GPU adapter
     };
 
     let input = b"this is a testing sentence";
-    let gpu_matches = block_on(gpu.scan(input)).unwrap();
+    let gpu_matches = block_on(gpu.scan(input))?;
 
     // The GPU literal backend returns overlapping matches (unlike CPU leftmost-first),
     // so we only verify that the longer pattern is NOT silently dropped.
@@ -424,25 +425,25 @@ fn gpu_prefilter_does_not_stop_at_shorter_prefix() {
             .any(|m| m.pattern_id == 0 && m.start == 10 && m.end == 14),
         "GPU must find 'test' (pattern_id=0, start=10, end=14)"
     );
+Ok(())
 }
 
 // === GPU/CPU Parity Tests ===
 
 /// (1) 50 literal patterns scanned on a 100KB input.
-#[test]
-fn gpu_cpu_parity_50_literals_100kb() {
+fn gpu_cpu_parity_50_literals_100kb() -> Result<()> {
     if is_software_adapter() {
-        return;
+        return Ok(());
     }
 
     let mut builder = PatternSet::builder();
     for i in 0..50 {
         builder = builder.literal(&format!("LITERAL_{i:03}_MATCH"));
     }
-    let ps = builder.build().unwrap();
+    let ps = builder.build()?;
 
     let Ok(gpu) = block_on(GpuMatcher::new(&ps)) else {
-        return; // No GPU adapter
+        return Ok(()); // No GPU adapter
     };
 
     let mut input = vec![b'x'; 100 * 1024];
@@ -453,8 +454,8 @@ fn gpu_cpu_parity_50_literals_100kb() {
     let p = b"LITERAL_049_MATCH";
     input[99980..99980 + p.len()].copy_from_slice(p);
 
-    let mut gpu_matches = block_on(gpu.scan(&input)).unwrap();
-    let mut cpu_matches = ps.scan(&input).unwrap();
+    let mut gpu_matches = block_on(gpu.scan(&input))?;
+    let mut cpu_matches = ps.scan(&input)?;
     gpu_matches.sort_unstable();
     cpu_matches.sort_unstable();
 
@@ -462,6 +463,7 @@ fn gpu_cpu_parity_50_literals_100kb() {
         gpu_matches, cpu_matches,
         "GPU/CPU parity failed for 50 literals on 100KB input"
     );
+Ok(())
 }
 
 /// (2) Mixed literal+regex patterns.
@@ -469,10 +471,9 @@ fn gpu_cpu_parity_50_literals_100kb() {
 /// The GPU regex readback maps internal indices to user IDs, but the DFA shader
 /// produces state-based pattern IDs that don't align with the literal pipeline's
 /// index space. This is a real bug in the GPU regex readback path.
-#[test]
-fn gpu_cpu_parity_mixed_literal_regex() {
+fn gpu_cpu_parity_mixed_literal_regex() -> Result<()> {
     if is_software_adapter() {
-        return;
+        return Ok(());
     }
 
     let ps = PatternSet::builder()
@@ -481,15 +482,15 @@ fn gpu_cpu_parity_mixed_literal_regex() {
         .literal("token")
         .regex(r"api[_-]?key")
         .build()
-        .unwrap();
+        ?;
 
     let Ok(gpu) = block_on(GpuMatcher::new(&ps)) else {
-        return; // No GPU adapter
+        return Ok(()); // No GPU adapter
     };
 
     let input = b"the password is secr3t and the token has api-key here";
-    let mut gpu_matches = block_on(gpu.scan(input)).unwrap();
-    let mut cpu_matches = ps.scan(input).unwrap();
+    let mut gpu_matches = block_on(gpu.scan(input))?;
+    let mut cpu_matches = ps.scan(input)?;
     gpu_matches.sort_unstable();
     cpu_matches.sort_unstable();
 
@@ -497,14 +498,14 @@ fn gpu_cpu_parity_mixed_literal_regex() {
         gpu_matches, cpu_matches,
         "GPU/CPU parity failed for mixed literal+regex patterns"
     );
+Ok(())
 }
 
 /// (3) Overlapping pattern matches at the same position.
 /// FINDING: Same GPU regex out-of-bounds as H19 — mixed literal+regex with overlaps.
-#[test]
-fn gpu_cpu_parity_overlapping_same_position() {
+fn gpu_cpu_parity_overlapping_same_position() -> Result<()> {
     if is_software_adapter() {
-        return;
+        return Ok(());
     }
 
     let ps = PatternSet::builder()
@@ -513,15 +514,15 @@ fn gpu_cpu_parity_overlapping_same_position() {
         .literal("needle")
         .regex("n..dle")
         .build()
-        .unwrap();
+        ?;
 
     let Ok(gpu) = block_on(GpuMatcher::new(&ps)) else {
-        return; // No GPU adapter
+        return Ok(()); // No GPU adapter
     };
 
     let input = b"needle";
-    let mut gpu_matches = block_on(gpu.scan(input)).unwrap();
-    let mut cpu_matches = ps.scan(input).unwrap();
+    let mut gpu_matches = block_on(gpu.scan(input))?;
+    let mut cpu_matches = ps.scan(input)?;
     gpu_matches.sort_unstable();
     cpu_matches.sort_unstable();
 
@@ -529,50 +530,50 @@ fn gpu_cpu_parity_overlapping_same_position() {
         gpu_matches, cpu_matches,
         "GPU/CPU parity failed for overlapping matches at same position"
     );
+Ok(())
 }
 
 /// (4) Empty input returns empty matches.
 /// FINDING: GPU regex .* matches empty input differently than CPU — regex semantics edge case.
-#[test]
-fn gpu_cpu_parity_empty_input() {
+fn gpu_cpu_parity_empty_input() -> Result<()> {
     if is_software_adapter() {
-        return;
+        return Ok(());
     }
 
     let ps = PatternSet::builder()
         .literal("test")
         .regex(".*")
         .build()
-        .unwrap();
+        ?;
 
     let Ok(gpu) = block_on(GpuMatcher::new(&ps)) else {
-        return; // No GPU adapter
+        return Ok(()); // No GPU adapter
     };
 
-    let gpu_matches = block_on(gpu.scan(b"")).unwrap();
-    let cpu_matches = ps.scan(b"").unwrap();
+    let gpu_matches = block_on(gpu.scan(b""))?;
+    let cpu_matches = ps.scan(b"")?;
 
     assert_eq!(
         gpu_matches, cpu_matches,
         "GPU/CPU parity failed for empty input"
     );
+Ok(())
 }
 
 /// (5) Input exactly at chunk boundary (128MB).
 /// FINDING: GPU scan at exactly 128MB triggers wgpu buffer allocation panic.
-#[test]
-fn gpu_cpu_parity_exact_chunk_boundary() {
+fn gpu_cpu_parity_exact_chunk_boundary() -> Result<()> {
     if is_software_adapter() {
-        return;
+        return Ok(());
     }
 
     let ps = PatternSet::builder()
         .literal("BOUNDARY_MATCH")
         .build()
-        .unwrap();
+        ?;
 
     let Ok(gpu) = block_on(GpuMatcher::new(&ps)) else {
-        return; // No GPU adapter
+        return Ok(()); // No GPU adapter
     };
 
     let size = DEFAULT_MAX_INPUT_SIZE;
@@ -581,8 +582,8 @@ fn gpu_cpu_parity_exact_chunk_boundary() {
     let offset = size - 14;
     input[offset..offset + 14].copy_from_slice(b"BOUNDARY_MATCH");
 
-    let mut gpu_matches = block_on(gpu.scan(&input)).unwrap();
-    let mut cpu_matches = ps.scan(&input).unwrap();
+    let mut gpu_matches = block_on(gpu.scan(&input))?;
+    let mut cpu_matches = ps.scan(&input)?;
     gpu_matches.sort_unstable();
     cpu_matches.sort_unstable();
 
@@ -590,6 +591,7 @@ fn gpu_cpu_parity_exact_chunk_boundary() {
         gpu_matches, cpu_matches,
         "GPU/CPU parity failed for input exactly at 128MB chunk boundary"
     );
+Ok(())
 }
 
 
@@ -597,27 +599,27 @@ fn gpu_cpu_parity_exact_chunk_boundary() {
 
 /// Match starting exactly at a chunk boundary must not be dropped.
 /// Uses a tiny chunk size to force chunking on a small input.
-#[test]
-fn gpu_scan_match_at_chunk_boundary() {
+fn gpu_scan_match_at_chunk_boundary() -> Result<()> {
     if is_software_adapter() {
-        return;
+        return Ok(());
     }
 
-    let ps = PatternSet::builder().literal("BOUNDARY").build().unwrap();
+    let ps = PatternSet::builder().literal("BOUNDARY").build()?;
 
     let config = AutoMatcherConfig::new().chunk_size(16).chunk_overlap(8);
     let Ok(gpu) = block_on(GpuMatcher::with_config(&ps, config)) else {
-        return; // No GPU adapter
+        return Ok(()); // No GPU adapter
     };
 
     // Place "BOUNDARY" so it starts at byte 16 (the chunk boundary).
     let mut input = vec![b'x'; 32];
     input[16..24].copy_from_slice(b"BOUNDARY");
 
-    let gpu_matches = block_on(gpu.scan(&input)).unwrap();
+    let gpu_matches = block_on(gpu.scan(&input))?;
     assert_eq!(gpu_matches.len(), 1, "match at chunk boundary must be found");
     assert_eq!(gpu_matches[0].start, 16);
     assert_eq!(gpu_matches[0].end, 24);
+Ok(())
 }
 
 /// compute_workgroups must reject inputs that exceed the device workgroup limit.
@@ -678,13 +680,14 @@ fn gpu_readback_detects_sentinel() {
                 "expected sentinel error for unread count buffer, got {:?}",
                 result
             );
+            count_staging.destroy();
+            match_staging.destroy();
         }
     }
 }
 
 /// read_matches must skip corrupted match offsets instead of trusting them.
-#[test]
-fn gpu_readback_skips_invalid_offsets() {
+fn gpu_readback_skips_invalid_offsets() -> Result<()> {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     if let Some(adapter) = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
     {
@@ -731,13 +734,16 @@ fn gpu_readback_skips_invalid_offsets() {
                 100,
                 8, // input_len = 8
             ))
-            .unwrap();
+            ?;
 
             assert_eq!(matches.len(), 1, "only the valid match should be kept");
             assert_eq!(matches[0].start, 0);
             assert_eq!(matches[0].end, 4);
+            count_staging.destroy();
+            match_staging.destroy();
         }
     }
+Ok(())
 }
 
 /// GpuBufferPool::get_or_create must not panic on sizes that overflow next_power_of_two.
@@ -769,25 +775,24 @@ fn buffer_pool_huge_size_no_panic() {
 
 // === Device Recovery Tests ===
 
-#[test]
-fn gpu_device_recovery_recreates_on_flag() {
-    let ps = PatternSet::builder().literal("hello").build().unwrap();
+fn gpu_device_recovery_recreates_on_flag() -> Result<()> {
+    let ps = PatternSet::builder().literal("hello").build()?;
     if let Ok(gpu) = block_on(GpuMatcher::new(&ps)) {
         // Force a device recreation by setting the flag.
         gpu.device_needs_recreation.store(true, std::sync::atomic::Ordering::SeqCst);
 
-        let matches = block_on(gpu.scan(b"hello world")).unwrap();
+        let matches = block_on(gpu.scan(b"hello world"))?;
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].pattern_id, 0);
 
         // Flag should be cleared after successful recreation.
         assert!(!gpu.device_needs_recreation.load(std::sync::atomic::Ordering::SeqCst));
     }
+Ok(())
 }
 
-#[test]
-fn gpu_device_recovery_concurrent_flag_set() {
-    let ps = PatternSet::builder().literal("test").build().unwrap();
+fn gpu_device_recovery_concurrent_flag_set() -> Result<()> {
+    let ps = PatternSet::builder().literal("test").build()?;
     if let Ok(gpu) = block_on(GpuMatcher::new(&ps)) {
         let gpu = Arc::new(gpu);
         let mut handles = vec![];
@@ -798,20 +803,22 @@ fn gpu_device_recovery_concurrent_flag_set() {
         for i in 0..4 {
             let gpu_clone = Arc::clone(&gpu);
             let data = format!("test data {i}").into_bytes();
-            handles.push(std::thread::spawn(move || {
+            handles.push(std::thread::spawn(move || -> Result<()> {
                 for _ in 0..5 {
-                    let matches = block_on(gpu_clone.scan(&data)).unwrap();
+                    let matches = block_on(gpu_clone.scan(&data))?;
                     assert!(!matches.is_empty());
                 }
+                Ok(())
             }));
         }
 
         for handle in handles {
-            handle.join().unwrap();
+            handle.join().expect("thread panicked")?;
         }
 
         assert!(!gpu.device_needs_recreation.load(std::sync::atomic::Ordering::SeqCst));
     }
+Ok(())
 }
 
 #[test]

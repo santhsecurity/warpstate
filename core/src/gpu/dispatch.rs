@@ -74,6 +74,25 @@ pub struct SpecializedRegexGpu {
     pub(crate) pattern_ids: Vec<usize>,
 }
 
+impl Drop for LiteralGpu {
+    fn drop(&mut self) {
+        self.pattern_bytes_buf.destroy();
+        self.pattern_offsets_buf.destroy();
+        self.prefilter_prefix_meta_buf.destroy();
+        self.prefilter_bucket_ranges_buf.destroy();
+        self.prefilter_entries_buf.destroy();
+    }
+}
+
+impl Drop for RegexGpu {
+    fn drop(&mut self) {
+        self.transitions_buf.destroy();
+        self.match_list_pointers_buf.destroy();
+        self.match_lists_buf.destroy();
+        self.pattern_lengths_buf.destroy();
+    }
+}
+
 /// Uniforms for the specialized DFA shader (transitions are in constants).
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -97,6 +116,7 @@ pub(crate) async fn scan_literal_chunk(
     max_input_size: usize,
 ) -> Result<Vec<Match>> {
     let input_len = super::to_u32_len(data.len(), max_input_size)?;
+    let workgroups = compute_workgroups(device, input_len)?;
     let packed_input = device::pad_to_u32(data);
     let packed_bytes = device::packed_u32_as_bytes(&packed_input);
     let input_usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
@@ -114,7 +134,12 @@ pub(crate) async fn scan_literal_chunk(
     let candidate_buf = buffer_pool.get_or_create(
         device,
         "warpstate literal candidates",
-        u64::from(max_matches) * 8, // vec2<u32> = 8 bytes
+        u64::from(max_matches)
+            .checked_mul(8)
+            .ok_or_else(|| Error::InputTooLarge {
+                bytes: usize::MAX,
+                max_bytes: max_input_size,
+            })?, // vec2<u32> = 8 bytes
         candidate_usage,
     );
     // Atomic counter for candidate list append operations.
@@ -127,7 +152,12 @@ pub(crate) async fn scan_literal_chunk(
         8, // 2 x u32: count + overflow flag
         candidate_count_usage,
     );
-    let match_buf_size = u64::from(max_matches) * 16;
+    let match_buf_size = u64::from(max_matches)
+        .checked_mul(16)
+        .ok_or_else(|| Error::InputTooLarge {
+            bytes: usize::MAX,
+            max_bytes: max_input_size,
+        })?;
     let match_usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
     let match_buf = buffer_pool.get_or_create(
         device,
@@ -200,7 +230,6 @@ pub(crate) async fn scan_literal_chunk(
         ],
     });
 
-    let workgroups = compute_workgroups(device, input_len)?;
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("warpstate literal encoder"),
     });
@@ -238,86 +267,82 @@ pub(crate) async fn scan_literal_chunk(
     encoder.copy_buffer_to_buffer(&match_buf, 0, &match_staging, 0, match_buf_size);
     queue.submit(Some(encoder.finish()));
 
-    // Check for candidate buffer overflow from prefilter stage.
-    // Overflow means some candidates were dropped — this would cause false negatives.
-    readback::await_buffer_map(
-        device,
-        queue,
-        &candidate_count_staging,
-        "GPU candidate count buffer map",
-    )
-    .await?;
+    let result: Result<Vec<Match>> = async {
+        // Check for candidate buffer overflow from prefilter stage.
+        // Overflow means some candidates were dropped — this would cause false negatives.
+        readback::await_buffer_map(
+            device,
+            queue,
+            &candidate_count_staging,
+            "GPU candidate count buffer map",
+        )
+        .await?;
 
-    let candidate_count_slice = candidate_count_staging.slice(..);
-    let candidate_count_data = candidate_count_slice.get_mapped_range();
-    let candidate_count_array: &[u32] = bytemuck::cast_slice(&candidate_count_data);
-    let candidate_overflow = if candidate_count_array.len() >= 2 {
-        candidate_count_array[1] != 0
-    } else {
-        false
-    };
-    drop(candidate_count_data);
-    candidate_count_staging.unmap();
-    candidate_count_staging.destroy();
+        let candidate_count_slice = candidate_count_staging.slice(..);
+        let candidate_count_data = candidate_count_slice.get_mapped_range();
+        let candidate_count_array: &[u32] = bytemuck::cast_slice(&candidate_count_data);
+        let candidate_overflow = if candidate_count_array.len() >= 2 {
+            candidate_count_array[1] != 0
+        } else {
+            false
+        };
+        drop(candidate_count_data);
+        candidate_count_staging.unmap();
 
-    let return_gpu_resources = || {
-        buffer_pool.return_buffer(candidate_buf, candidate_usage);
-        buffer_pool.return_buffer(candidate_count_buf, candidate_count_usage);
-        buffer_pool.return_buffer(match_buf, match_usage);
-        buffer_pool.return_buffer(count_buf, count_usage);
-        buffer_pool.return_buffer(prefilter_uniform_buf, uniform_usage);
-        buffer_pool.return_buffer(verify_uniform_buf, uniform_usage);
-        buffer_pool.return_buffer(input_buf, input_usage);
-    };
+        if candidate_overflow {
+            let base_offset_u32 = u32::try_from(base_offset).map_err(|_| Error::InputTooLarge {
+                bytes: usize::MAX,
+                max_bytes: u32::MAX as usize,
+            })?;
 
-    if candidate_overflow {
-        return_gpu_resources();
-
-        let base_offset_u32 = u32::try_from(base_offset).map_err(|_| Error::InputTooLarge {
-            bytes: usize::MAX,
-            max_bytes: u32::MAX as usize,
-        })?;
-
-        let mut matches = pattern_set.scan(data)?;
-        let literal_pattern_ids: HashSet<usize> = literal.pattern_ids.iter().copied().collect();
-        for mat in &mut matches {
-            let start_offset =
-                base_offset_u32
+            let mut matches = pattern_set.scan(data)?;
+            let literal_pattern_ids: HashSet<usize> = literal.pattern_ids.iter().copied().collect();
+            for mat in &mut matches {
+                let start_offset = base_offset_u32
                     .checked_add(mat.start)
                     .ok_or(Error::InputTooLarge {
                         bytes: usize::MAX,
                         max_bytes: u32::MAX as usize,
                     })?;
-            let end_offset = base_offset_u32
-                .checked_add(mat.end)
-                .ok_or(Error::InputTooLarge {
-                    bytes: usize::MAX,
-                    max_bytes: u32::MAX as usize,
-                })?;
+                let end_offset = base_offset_u32
+                    .checked_add(mat.end)
+                    .ok_or(Error::InputTooLarge {
+                        bytes: usize::MAX,
+                        max_bytes: u32::MAX as usize,
+                    })?;
 
-            mat.start = start_offset;
-            mat.end = end_offset;
+                mat.start = start_offset;
+                mat.end = end_offset;
+            }
+            matches.retain(|mat| literal_pattern_ids.contains(&(mat.pattern_id as usize)));
+
+            return Ok(matches);
         }
-        matches.retain(|mat| literal_pattern_ids.contains(&(mat.pattern_id as usize)));
 
-        return Ok(matches);
+        readback::read_matches(
+            device,
+            queue,
+            &count_staging,
+            &match_staging,
+            Some(&literal.pattern_ids),
+            base_offset,
+            max_matches,
+            data.len(),
+        )
+        .await
     }
-
-    let result = readback::read_matches(
-        device,
-        queue,
-        &count_staging,
-        &match_staging,
-        Some(&literal.pattern_ids),
-        base_offset,
-        max_matches,
-        data.len(),
-    )
     .await;
 
+    candidate_count_staging.destroy();
     count_staging.destroy();
     match_staging.destroy();
-    return_gpu_resources();
+    buffer_pool.return_buffer(candidate_buf, candidate_usage);
+    buffer_pool.return_buffer(candidate_count_buf, candidate_count_usage);
+    buffer_pool.return_buffer(match_buf, match_usage);
+    buffer_pool.return_buffer(count_buf, count_usage);
+    buffer_pool.return_buffer(prefilter_uniform_buf, uniform_usage);
+    buffer_pool.return_buffer(verify_uniform_buf, uniform_usage);
+    buffer_pool.return_buffer(input_buf, input_usage);
 
     result
 }
@@ -355,13 +380,19 @@ pub(crate) async fn scan_regex_chunk(
         });
     }
     let input_len = super::to_u32_len(data.len(), max_input_size)?;
+    let workgroups = compute_workgroups(device, input_len)?;
     let packed_input = device::pad_to_u32(data);
     let input_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("warpstate regex input"),
         contents: device::packed_u32_as_bytes(&packed_input),
         usage: wgpu::BufferUsages::STORAGE,
     });
-    let match_buf_size = u64::from(max_matches) * 16;
+    let match_buf_size = u64::from(max_matches)
+        .checked_mul(16)
+        .ok_or_else(|| Error::InputTooLarge {
+            bytes: usize::MAX,
+            max_bytes: max_input_size,
+        })?;
     let match_usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
     let match_buf = buffer_pool.get_or_create(
         device,
@@ -407,7 +438,6 @@ pub(crate) async fn scan_regex_chunk(
         ],
     });
 
-    let workgroups = compute_workgroups(device, input_len)?;
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("warpstate regex encoder"),
     });
@@ -427,10 +457,6 @@ pub(crate) async fn scan_regex_chunk(
     encoder.copy_buffer_to_buffer(&match_buf, 0, &match_staging, 0, match_buf_size);
     queue.submit(Some(encoder.finish()));
 
-    input_buf.destroy();
-    count_buf.destroy();
-    uniform_buf.destroy();
-
     let result = readback::read_matches(
         device,
         queue,
@@ -445,6 +471,9 @@ pub(crate) async fn scan_regex_chunk(
 
     count_staging.destroy();
     match_staging.destroy();
+    input_buf.destroy();
+    count_buf.destroy();
+    uniform_buf.destroy();
     buffer_pool.return_buffer(match_buf, match_usage);
 
     result
@@ -464,13 +493,19 @@ pub(crate) async fn scan_specialized_regex_chunk(
     max_input_size: usize,
 ) -> Result<Vec<Match>> {
     let input_len = super::to_u32_len(data.len(), max_input_size)?;
+    let workgroups = compute_workgroups(device, input_len)?;
     let packed_input = device::pad_to_u32(data);
     let input_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("warpstate specialized regex input"),
         contents: device::packed_u32_as_bytes(&packed_input),
         usage: wgpu::BufferUsages::STORAGE,
     });
-    let match_buf_size = u64::from(max_matches) * 16;
+    let match_buf_size = u64::from(max_matches)
+        .checked_mul(16)
+        .ok_or_else(|| Error::InputTooLarge {
+            bytes: usize::MAX,
+            max_bytes: max_input_size,
+        })?;
     let match_usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
     let match_buf = buffer_pool.get_or_create(
         device,
@@ -505,7 +540,6 @@ pub(crate) async fn scan_specialized_regex_chunk(
         ],
     });
 
-    let workgroups = compute_workgroups(device, input_len)?;
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("warpstate specialized regex encoder"),
     });
@@ -529,10 +563,6 @@ pub(crate) async fn scan_specialized_regex_chunk(
     encoder.copy_buffer_to_buffer(&match_buf, 0, &match_staging, 0, match_buf_size);
     queue.submit(Some(encoder.finish()));
 
-    input_buf.destroy();
-    count_buf.destroy();
-    uniform_buf.destroy();
-
     let result = readback::read_matches(
         device,
         queue,
@@ -547,6 +577,9 @@ pub(crate) async fn scan_specialized_regex_chunk(
 
     count_staging.destroy();
     match_staging.destroy();
+    input_buf.destroy();
+    count_buf.destroy();
+    uniform_buf.destroy();
     buffer_pool.return_buffer(match_buf, match_usage);
 
     result
