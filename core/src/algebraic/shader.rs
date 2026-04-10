@@ -1,7 +1,6 @@
 //! WGSL shader generation for algebraic DFA prefix-scan execution.
 
-/// Workgroup size for the algebraic compute shaders.
-pub const WORKGROUP_SIZE: u32 = 256;
+pub use crate::shader::WORKGROUP_SIZE;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -65,9 +64,16 @@ fn map_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let byte_val = (input_data[word_idx] >> byte_offset) & 0xFFu;
     let class_id = uniforms.byte_classes[byte_val >> 2u][byte_val & 3u];
     let base = pos * uniforms.state_count;
+    let table_len = arrayLength(&transition_table);
 
     for (var state = 0u; state < uniforms.state_count; state = state + 1u) {{
-        let next = transition_table[state * uniforms.class_count + class_id];
+        let idx = state * uniforms.class_count + class_id;
+        var next: u32;
+        if idx < table_len {{
+            next = transition_table[idx];
+        }} else {{
+            next = 0x40000000u;
+        }}
         func_table[base + state] = next & MASK_STATE;
     }}
 }}"#
@@ -106,7 +112,11 @@ fn scan_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let src_base = (pos - uniforms.stride) * uniforms.state_count;
     for (var state = 0u; state < uniforms.state_count; state = state + 1u) {{
         let intermediate = func_table_in[src_base + state];
-        func_table_out[base + state] = func_table_in[base + intermediate];
+        if intermediate < uniforms.state_count {{
+            func_table_out[base + state] = func_table_in[base + intermediate];
+        }} else {{
+            func_table_out[base + state] = state;
+        }}
     }}
 }}"#
     )
@@ -143,6 +153,9 @@ fn extract_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
     let base = pos * uniforms.state_count;
     let final_state = func_table[base + uniforms.carry_state];
+    if final_state >= arrayLength(&match_list_pointers) {{
+        return;
+    }}
     let match_ptr = match_list_pointers[final_state];
     let qty = match_lists[match_ptr];
     let end = uniforms.block_offset + pos + 1u;
@@ -161,7 +174,6 @@ fn extract_main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 }}"#
     )
 }
-
 
 #[cfg(test)]
 mod tests {

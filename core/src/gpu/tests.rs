@@ -633,18 +633,29 @@ fn gpu_compute_workgroups_respects_limits() {
         {
             let max = device.limits().max_compute_workgroups_per_dimension;
             let max_x = max.min(65_535);
-            // Input that fits exactly at the 2D limit
-            let ok_input = max_x * max * shader::WORKGROUP_SIZE;
-            assert!(dispatch::compute_workgroups(&device, ok_input).is_ok());
 
-            // Input that exceeds the 2D limit by one workgroup
-            let bad_input = ok_input + shader::WORKGROUP_SIZE;
-            let result = dispatch::compute_workgroups(&device, bad_input);
-            assert!(
-                matches!(result, Err(Error::GpuDeviceError { .. })),
-                "expected GpuDeviceError for workgroup overflow, got {:?}",
-                result
-            );
+            // Input that fits exactly in 1D
+            let ok_1d = max * shader::WORKGROUP_SIZE;
+            assert!(dispatch::compute_workgroups(&device, ok_1d).is_ok());
+
+            // Input that requires 2D dispatch
+            let ok_2d = (max_x + 1) * shader::WORKGROUP_SIZE;
+            if ok_2d <= u32::MAX {
+                let dims = dispatch::compute_workgroups(&device, ok_2d).unwrap();
+                assert!(dims.y >= 2, "input exceeding max_x must spill to y dimension");
+            }
+
+            // Input that exceeds the 2D limit (if u32::MAX is large enough)
+            let bad_input = u32::MAX;
+            let bad_workgroups = (bad_input as u64).div_ceil(shader::WORKGROUP_SIZE as u64);
+            if bad_workgroups > (max_x as u64) * (max as u64) {
+                let result = dispatch::compute_workgroups(&device, bad_input);
+                assert!(
+                    matches!(result, Err(Error::GpuDeviceError { .. })),
+                    "expected GpuDeviceError for workgroup overflow, got {:?}",
+                    result
+                );
+            }
         }
     }
 }

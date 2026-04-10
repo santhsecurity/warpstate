@@ -74,13 +74,9 @@ fn main(
     @builtin(global_invocation_id) gid: vec3<u32>,
     @builtin(local_invocation_id) local_id: vec3<u32>,
 ) {
-    // Only the absolute first thread initializes status to OK to prevent
-    // a slow workgroup from overwriting an error set by an earlier workgroup.
-    if gid.x == 0u && gid.y == 0u {
-        atomicStore(&match_count[2], STATUS_OK);
-    }
+    // CPU already initializes match_count[2] to STATUS_OK before dispatch.
+    // Any thread in any workgroup can set error status (atomic).
     workgroupBarrier();
-    // Any thread in any workgroup can set error status (atomic, never overwritten by OK).
     if uniforms.table_size > MAX_SMEM_ENTRIES {
         atomicStore(&match_count[2], STATUS_TABLE_TOO_LARGE);
     }
@@ -109,7 +105,7 @@ fn main(
         let class_id = uniforms.byte_classes[byte >> 2u][byte & 3u];
         let state_idx = state & MASK_STATE;
         let smem_idx = state_idx * uniforms.class_count + class_id;
-        if smem_idx >= MAX_SMEM_ENTRIES {
+        if smem_idx >= MAX_SMEM_ENTRIES || smem_idx >= uniforms.table_size {
             atomicStore(&match_count[2], STATUS_TABLE_TOO_LARGE);
             return;
         }
@@ -125,8 +121,6 @@ fn main(
                 if count < uniforms.max_matches {
                     let pat_id = match_lists[match_ptr + 1u + m];
                     let pat_len = pattern_lengths[pat_id];
-                    // The end position is determined by start position (pos) + pattern length.
-                    // If pat_len is 0, we default to the current matched byte boundary (i + 1).
                     let end_pos = select(i + 1u, min(pos + pat_len, uniforms.input_len), pat_len != 0u);
                     match_output[count] = vec4<u32>(pat_id, pos, end_pos, 0u);
                 } else {
@@ -143,7 +137,7 @@ fn main(
     if (state & FLAG_DEAD) == 0u {
         let state_idx = state & MASK_STATE;
         let eoi_smem_idx = state_idx * uniforms.class_count + uniforms.eoi_class;
-        if eoi_smem_idx >= MAX_SMEM_ENTRIES {
+        if eoi_smem_idx >= MAX_SMEM_ENTRIES || eoi_smem_idx >= uniforms.table_size {
             atomicStore(&match_count[2], STATUS_TABLE_TOO_LARGE);
             return;
         }
@@ -159,7 +153,7 @@ fn main(
                 if count < uniforms.max_matches {
                     let pat_id = match_lists[match_ptr + 1u + m];
                     let pat_len = pattern_lengths[pat_id];
-                    let end_pos = select(end_limit, min(pos + pat_len, uniforms.input_len), pat_len != 0u);
+                    let end_pos = select(uniforms.input_len, min(pos + pat_len, uniforms.input_len), pat_len != 0u);
                     match_output[count] = vec4<u32>(pat_id, pos, end_pos, 0u);
                 } else {
                     atomicStore(&match_count[1], 1u);
@@ -176,7 +170,11 @@ __PREAMBLE__
 const TRANS: array<u32, __TRANS_LEN__> = array<u32, __TRANS_LEN__>(__TRANS_DATA__);
 
 fn transition_at(state_idx: u32, class_id: u32) -> u32 {
-    return TRANS[state_idx * uniforms.class_count + class_id];
+    let idx = state_idx * uniforms.class_count + class_id;
+    if idx >= __TRANS_LEN__u {
+        return FLAG_DEAD;
+    }
+    return TRANS[idx];
 }
 
 @compute @workgroup_size(__WORKGROUP_SIZE__)
@@ -210,8 +208,6 @@ fn main(
                 if count < uniforms.max_matches {
                     let pat_id = match_lists[match_ptr + 1u + m];
                     let pat_len = pattern_lengths[pat_id];
-                    // The end position is determined by start position (pos) + pattern length.
-                    // If pat_len is 0, we default to the current matched byte boundary (i + 1).
                     let end_pos = select(i + 1u, min(pos + pat_len, uniforms.input_len), pat_len != 0u);
                     match_output[count] = vec4<u32>(pat_id, pos, end_pos, 0u);
                 } else {
@@ -239,7 +235,7 @@ fn main(
                 if count < uniforms.max_matches {
                     let pat_id = match_lists[match_ptr + 1u + m];
                     let pat_len = pattern_lengths[pat_id];
-                    let end_pos = select(end_limit, min(pos + pat_len, uniforms.input_len), pat_len != 0u);
+                    let end_pos = select(uniforms.input_len, min(pos + pat_len, uniforms.input_len), pat_len != 0u);
                     match_output[count] = vec4<u32>(pat_id, pos, end_pos, 0u);
                 } else {
                     atomicStore(&match_count[1], 1u);
@@ -348,7 +344,6 @@ mod tests {
     #[test]
     fn smem_shader_no_unconditional_status_ok() {
         let source = generate_regex_dfa_smem_shader();
-        // The race-fix removes the unconditional atomicStore(STATUS_OK) by thread (0,0).
         assert!(
             !source.contains("atomicStore(&match_count[2], STATUS_OK)"),
             "shader must not unconditionally overwrite status — CPU initializes it"
@@ -376,8 +371,9 @@ mod tests {
     #[test]
     fn smem_specialized_transition_has_bounds_check() {
         let source = generate_specialized_shader(&[1, 2, 3, 4], 2);
+        // __TRANS_LEN__ is replaced with the actual length (4), so the guard becomes "idx >= 4u".
         assert!(
-            source.contains("idx >= __TRANS_LEN__u"),
+            source.contains("idx >= 4u"),
             "specialized transition_at must guard against OOB"
         );
         assert!(source.contains("return FLAG_DEAD;"));
