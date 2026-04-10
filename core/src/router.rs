@@ -133,12 +133,48 @@ impl AutoMatcher {
 
     /// Synchronous constructor — safe from inside or outside async runtimes.
     pub fn new_blocking(patterns: &PatternSet) -> Result<Self> {
-        pollster::block_on(Self::new(patterns))
+        #[cfg(feature = "gpu")]
+        {
+            pollster::block_on(Self::new(patterns))
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            // No async work without GPU — construct directly.
+            Self::with_config_blocking(patterns, AutoMatcherConfig::default())
+        }
     }
 
     /// Synchronous constructor with config — safe from inside or outside async.
     pub fn with_config_blocking(patterns: &PatternSet, config: AutoMatcherConfig) -> Result<Self> {
-        pollster::block_on(Self::with_config(patterns, config))
+        #[cfg(feature = "gpu")]
+        {
+            pollster::block_on(Self::with_config(patterns, config))
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            // No async work without GPU — construct directly.
+            let mut config = config;
+            let max_pattern_length = patterns
+                .ir()
+                .offsets
+                .iter()
+                .map(|&(_, len)| len as usize)
+                .max()
+                .unwrap_or(0);
+            config.chunk_overlap = config.configured_chunk_overlap().max(max_pattern_length);
+            let threshold = config.configured_gpu_threshold();
+            Ok(Self {
+                patterns: patterns.clone(),
+                gpu_threshold_atomic: std::sync::atomic::AtomicUsize::new(threshold),
+                state: Mutex::new(RouterState {
+                    gpu_threshold: threshold,
+                    tuned: false,
+                    tune_samples: 0,
+                    speedup_sum: 0.0,
+                }),
+                config,
+            })
+        }
     }
 
     /// Backward-compatible constructor for ad-hoc options.
@@ -229,33 +265,40 @@ impl AutoMatcher {
 
     /// Synchronous scan for callers without an async runtime.
     ///
-    /// Safe to call from inside or outside a tokio runtime — uses a
-    /// dedicated thread to avoid runtime nesting panics.
+    /// Without GPU: directly calls the CPU scan path (no async needed).
+    /// With GPU: uses pollster outside tokio, or spawns a thread inside tokio.
     pub fn scan_blocking(&self, input: &[u8]) -> Result<Vec<Match>> {
-        // Try pollster first (works when NOT inside a tokio runtime).
-        // If we're inside tokio, spawn a thread with its own runtime.
-        if tokio::runtime::Handle::try_current().is_err() {
-            return pollster::block_on(self.scan(input));
+        #[cfg(not(feature = "gpu"))]
+        {
+            // CPU-only path is fully synchronous.
+            self.patterns.scan(input)
         }
-        // Inside a tokio runtime — must escape to a new thread.
-        let input = input.to_vec();
-        let this = self as *const Self as usize;
-        // SAFETY: AutoMatcher is Send+Sync and we join before returning.
-        let handle = std::thread::spawn(move || {
-            let matcher = unsafe { &*(this as *const Self) };
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| crate::error::Error::PatternCompilationFailed {
-                    reason: format!("scan_blocking runtime: {e}"),
-                })?;
-            rt.block_on(matcher.scan(&input))
-        });
-        handle
-            .join()
-            .map_err(|_| crate::error::Error::PatternCompilationFailed {
-                reason: "scan_blocking thread panicked".to_string(),
-            })?
+        #[cfg(feature = "gpu")]
+        {
+            // Try pollster first (works when NOT inside a tokio runtime).
+            if tokio::runtime::Handle::try_current().is_err() {
+                return pollster::block_on(self.scan(input));
+            }
+            // Inside a tokio runtime — must escape to a new thread.
+            let input = input.to_vec();
+            let this = self as *const Self as usize;
+            // SAFETY: AutoMatcher is Send+Sync and we join before returning.
+            let handle = std::thread::spawn(move || {
+                let matcher = unsafe { &*(this as *const Self) };
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| crate::error::Error::PatternCompilationFailed {
+                        reason: format!("scan_blocking runtime: {e}"),
+                    })?;
+                rt.block_on(matcher.scan(&input))
+            });
+            handle
+                .join()
+                .map_err(|_| crate::error::Error::PatternCompilationFailed {
+                    reason: "scan_blocking thread panicked".to_string(),
+                })?
+        }
     }
 
     #[cfg(feature = "gpu")]

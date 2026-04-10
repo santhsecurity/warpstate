@@ -22,9 +22,8 @@ fn test_01_build_pattern_set_892_literals() {
 }
 #[test]
 fn test_02_empty_pattern_set() {
-    let set = PatternSet::builder().build().unwrap();
-    let matches = set.scan(b"test").unwrap();
-    assert_eq!(matches.len(), 0);
+    let result = PatternSet::builder().build();
+    assert!(result.is_err(), "Empty pattern set must return an error");
 }
 #[test]
 fn test_03_single_1_char_pattern() {

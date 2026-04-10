@@ -96,6 +96,7 @@ impl<T: ZeroCopyBlockMatcher + Send + Sync> ZeroCopyScan<'_, T> {
     }
 }
 
+#[async_trait::async_trait]
 impl<T: BlockMatcher + Send + Sync> Matcher for StreamPipeline<T> {
     async fn scan(&self, data: &[u8]) -> matchkit::Result<Vec<Match>> {
         if data.is_empty() {
