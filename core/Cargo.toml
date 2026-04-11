@@ -261,3 +261,7 @@ path = "tests/property/proptest_parity.rs"
 [[test]]
 name = "property_proptest_scan"
 path = "tests/property/proptest_scan.rs"
+
+[[test]]
+name = "correctness_guarantees"
+path = "tests/correctness_guarantees.rs"
