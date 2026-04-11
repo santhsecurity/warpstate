@@ -59,7 +59,6 @@ impl CompiledPatternIndex {
                 pattern_id,
                 start,
                 end,
-                padding: 0,
             });
         }
         Ok(matches)
@@ -100,7 +99,6 @@ impl CompiledPatternIndex {
                             start: pos as u32,
                             // SAFETY: pos + len <= data.len() which is validated <= u32::MAX
                             end: (pos + len) as u32,
-                            padding: 0,
                         };
                         if best
                             .as_ref()
@@ -156,7 +154,6 @@ impl CompiledPatternIndex {
                         pattern_id,
                         start,
                         end,
-                        padding: 0,
                     };
                     if best
                         .as_ref()
@@ -207,10 +204,20 @@ impl CompiledPatternIndex {
         else {
             return EitherIter::Empty(std::iter::empty());
         };
-        let start = range[0] as usize;
-        let end = start + range[1] as usize;
+        let Ok(start) = usize::try_from(range[0]) else {
+            return EitherIter::Empty(std::iter::empty());
+        };
+        let Ok(len) = usize::try_from(range[1]) else {
+            return EitherIter::Empty(std::iter::empty());
+        };
+        let Some(end) = start.checked_add(len) else {
+            return EitherIter::Empty(std::iter::empty());
+        };
+        let Some(entries) = literals.literal_prefilter_table.entries.get(start..end) else {
+            return EitherIter::Empty(std::iter::empty());
+        };
         EitherIter::Slice(
-            literals.literal_prefilter_table.entries[start..end]
+            entries
                 .iter()
                 .filter(move |entry| entry[0] == hash)
                 .map(|entry| entry[1]),
@@ -238,9 +245,18 @@ fn bytes_match(expected: &[u8], actual: &[u8], case_insensitive: bool) -> bool {
             .all(|(&left, &right)| left.eq_ignore_ascii_case(&right))
 }
 
+/// Leftmost-longest match priority matching Aho-Corasick's `LeftmostFirst`
+/// semantics used by `PatternSet::scan()`.
+///
+/// AC `LeftmostFirst` continues matching after a short pattern completes,
+/// reporting the **longest** match at each start position. For patterns
+/// `["p", "p6"]` at input `"p6"`, AC reports `"p6"` (end=36) not `"p"`
+/// (end=35) because the automaton tentatively matches `"p"` but extends
+/// to `"p6"` before emitting.
+///
+/// Priority: longest match first (higher end), then lowest pattern_id.
 fn match_precedes(left: &Match, right: &Match) -> bool {
-    left.pattern_id < right.pattern_id
-        || (left.pattern_id == right.pattern_id && left.end < right.end)
+    left.end > right.end || (left.end == right.end && left.pattern_id < right.pattern_id)
 }
 
 fn sort_matches_if_needed(matches: &mut [Match]) {

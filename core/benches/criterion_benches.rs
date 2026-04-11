@@ -284,7 +284,6 @@ fn bench_config_construction(c: &mut Criterion) {
                     .max_matches(4096)
                     .chunk_size(8192)
                     .chunk_overlap(128)
-                    .auto_tune_threshold(false)
                     .max_scan_depth(Some(100)),
             );
         });

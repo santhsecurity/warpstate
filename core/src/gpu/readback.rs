@@ -24,7 +24,7 @@ pub(crate) async fn await_buffer_map(
         let _ = done_tx.send(());
     });
 
-    let deadline = tokio::time::Instant::now() + GPU_MAP_TIMEOUT;
+    let deadline = std::time::Instant::now() + GPU_MAP_TIMEOUT;
     let mut map_ok = false;
     let mut gpu_done = false;
 
@@ -48,7 +48,7 @@ pub(crate) async fn await_buffer_map(
             return Ok(());
         }
 
-        if tokio::time::Instant::now() >= deadline {
+        if std::time::Instant::now() >= deadline {
             return Err(Error::GpuDeviceError {
                 reason: format!(
                     "GPU buffer map timed out after {}s: {timeout_msg}",
@@ -56,7 +56,7 @@ pub(crate) async fn await_buffer_map(
                 ),
             });
         }
-        tokio::task::yield_now().await;
+        std::thread::yield_now();
     }
 }
 
@@ -214,7 +214,6 @@ pub(crate) async fn read_matches(
                 pattern_id: user_pattern_id,
                 start,
                 end,
-                padding: 0,
             });
         }
         Ok(matches)

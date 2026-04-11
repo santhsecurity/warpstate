@@ -1,13 +1,11 @@
 //! Zero-copy DMA integrations bridging wireshift io_uring with GPU VRAM.
 //!
 //! Exposes mapped `wgpu::Buffer` staging for host-to-GPU data transfer.
-//! Data flows: NVMe → host memory (mapped buffer) → GPU VRAM (`flush_to_vram` method).
-#![allow(unsafe_code)]
+//! Data flows: NVMe → host memory (staging buffer) → GPU VRAM.
 
 use crate::error::Result;
-use std::ptr::NonNull;
 
-/// Wraps a host-visible `wgpu::Buffer` with `MAP_WRITE | COPY_SRC` usage.
+/// Wraps a host staging region and a GPU copy-source buffer.
 ///
 /// Callers write data into the mapped buffer via [`write`](Self::write), then call
 /// [`flush_to_vram`](Self::flush_to_vram) to unmap and make the data available for GPU compute
@@ -17,23 +15,22 @@ use std::ptr::NonNull;
 /// that wireshift can fill directly from I/O completions.
 #[derive(Debug)]
 pub struct DmaStagingBuffer {
-    /// The underlying wgpu buffer, created mapped-at-creation.
+    /// The underlying wgpu buffer.
     buffer: wgpu::Buffer,
-    /// Pointer into the mapped buffer while it remains mapped.
-    mapped_ptr: NonNull<u8>,
+    /// Host-side staging bytes.
+    host: Vec<u8>,
     /// Caller-visible writable length in bytes.
     len: usize,
     /// Capacity in bytes.
     capacity: usize,
-    /// Whether the mapped memory has already been flushed/unmapped.
+    /// Whether the staging memory has already been flushed.
     flushed: bool,
 }
 
 impl DmaStagingBuffer {
     /// Create a new staging buffer bound to host-visible GPU memory.
     ///
-    /// The buffer is created with `mapped_at_creation: true`, ready for
-    /// immediate writes.
+    /// The host staging slice is ready for immediate writes.
     ///
     /// # Errors
     ///
@@ -59,23 +56,13 @@ impl DmaStagingBuffer {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("dma_staging_nvme_recv"),
             size: capacity as u64,
-            usage: wgpu::BufferUsages::MAP_WRITE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: true,
+            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
-
-        // SAFETY: `mapped_at_creation: true` keeps the buffer mapped after the
-        // BufferViewMut is dropped. The raw pointer captured here remains valid
-        // until `buffer.unmap()` is called in `flush_to_vram()`. Dropping the
-        // view only releases the borrow — it does NOT unmap the underlying memory.
-        let mut initial_view = buffer.slice(..).get_mapped_range_mut();
-        initial_view.fill(0);
-        let mapped_ptr =
-            NonNull::new(initial_view.as_mut_ptr()).ok_or(crate::error::Error::BufferMapFailed)?;
-        drop(initial_view);
 
         Ok(Self {
             buffer,
-            mapped_ptr,
+            host: vec![0; capacity],
             len,
             capacity,
             flushed: false,
@@ -95,10 +82,10 @@ impl DmaStagingBuffer {
         self.as_mut_slice()[..len].copy_from_slice(&data[..len]);
     }
 
-    /// Returns a mutable slice into the mapped GPU-visible memory.
+    /// Returns a mutable slice into the staging memory.
     ///
-    /// Caller writes directly into this slice, eliminating one memcpy.
-    /// The returned slice remains valid until [`flush_to_vram`](Self::flush_to_vram) is called.
+    /// Caller writes directly into this slice. Call [`upload_to_vram`](Self::upload_to_vram)
+    /// before using the GPU copy-source buffer.
     ///
     /// # Panics
     ///
@@ -109,33 +96,24 @@ impl DmaStagingBuffer {
             "mapped staging buffer was already flushed to VRAM"
         );
 
-        // SAFETY: `mapped_ptr` is captured from `get_mapped_range_mut()` while the buffer is
-        // mapped at creation. The buffer remains mapped until `flush_to_vram()` calls `unmap()`.
-        // The `&mut self` receiver guarantees unique mutable access to the staging buffer while
-        // the slice exists, preventing aliasing through this API.
-        unsafe { std::slice::from_raw_parts_mut(self.mapped_ptr.as_ptr(), self.len) }
+        &mut self.host[..self.len]
     }
 
-    /// Returns the raw mapped pointer and logical writable length.
-    ///
-    /// This is the integration point for external I/O runtimes, such as a downstream
-    /// `wireshift::Buffer::from_mapped_buffer(ptr, len)` constructor.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the mapped buffer has already been flushed to VRAM.
-    pub fn mapped_parts(&mut self) -> (*mut u8, usize) {
-        let slice = self.as_mut_slice();
-        (slice.as_mut_ptr(), slice.len())
-    }
-
-    /// Unmap the buffer, flushing written data to GPU-accessible VRAM.
+    /// Mark the staging buffer as flushed.
     ///
     /// After this call, the buffer can be used as a `COPY_SRC` in a
     /// command encoder to transfer data into storage buffers for compute.
     pub fn flush_to_vram(&mut self) {
+        if self.flushed {
+            return;
+        }
         self.flushed = true;
-        self.buffer.unmap();
+    }
+
+    /// Upload the staged bytes into the GPU-visible copy-source buffer.
+    pub fn upload_to_vram(&mut self, queue: &wgpu::Queue) {
+        self.flush_to_vram();
+        queue.write_buffer(&self.buffer, 0, &self.host);
     }
 
     /// Get a reference to the underlying `wgpu::Buffer` for use in copy
@@ -160,24 +138,14 @@ impl DmaStagingBuffer {
     }
 }
 
-/// Trait for external buffer types that can be constructed from mapped memory.
+/// Trait for external buffer types that can be constructed from staging memory.
 ///
 /// This lets downstream crates implement zero-copy adapters without forcing
 /// `warpstate` to depend directly on a specific I/O runtime crate.
 pub trait FromMappedBuffer: Sized {
-    /// Construct a buffer from a raw writable pointer and length.
-    ///
-    /// # Safety
-    ///
-    /// The caller must guarantee that `ptr..ptr+len` remains valid for the lifetime
-    /// requirements of the constructed buffer and that no aliased mutable access occurs.
-    unsafe fn from_mapped_buffer(ptr: *mut u8, len: usize) -> Self;
+    /// Construct a buffer from a writable staging slice.
+    fn from_mapped_buffer(buffer: &mut [u8]) -> Self;
 }
-
-// SAFETY: The staging buffer is moved between tasks as an owned value. The mapped pointer
-// always refers to memory owned by the `wgpu::Buffer`, and all mutable access remains gated
-// by `&mut self` methods on the buffer before it is flushed and consumed.
-unsafe impl Send for DmaStagingBuffer {}
 
 /// Scan path selection for file-to-GPU data transfer.
 ///

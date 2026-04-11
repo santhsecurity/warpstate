@@ -246,19 +246,16 @@ mod tests {
                 pattern_id: 1,
                 start: 50,
                 end: 56,
-                padding: 0,
             },
             Match {
                 pattern_id: 0,
                 start: 10,
                 end: 16,
-                padding: 0,
             },
             Match {
                 pattern_id: 1,
                 start: 50,
                 end: 56,
-                padding: 0,
             },
         ];
 
@@ -271,13 +268,11 @@ mod tests {
                     pattern_id: 0,
                     start: 10,
                     end: 16,
-                    padding: 0,
                 },
                 Match {
                     pattern_id: 1,
                     start: 50,
                     end: 56,
-                    padding: 0,
                 },
             ]
         );

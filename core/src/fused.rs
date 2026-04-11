@@ -25,6 +25,9 @@ impl FusedSievePlan {
         if !ir.regex_dfas().is_empty() || ir.offsets.is_empty() {
             return None;
         }
+        if ir.max_pattern_len > FUSED_WINDOW_BYTES {
+            return None;
+        }
 
         let literal_patterns = ir
             .offsets
@@ -264,7 +267,7 @@ impl FusedScanner {
         }
 
         let overlap = self.patterns.max_pattern_len().saturating_sub(1);
-        let stride = FUSED_WINDOW_BYTES.saturating_sub(overlap).max(1);
+        let stride = FUSED_WINDOW_BYTES.saturating_sub(overlap).max(64);
         let mut window_start = 0usize;
         let mut pending_region: Option<(usize, usize)> = None;
 
@@ -340,7 +343,6 @@ impl FusedScanner {
                     pattern_id: matched.pattern_id,
                     start: start_u32,
                     end: end_u32,
-                    padding: matched.padding,
                 });
                 keep_scanning
             })?;

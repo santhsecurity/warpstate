@@ -89,9 +89,10 @@ fn push_bytes(bytes: &mut Vec<u8>, payload: &[u8]) -> Result<()> {
 
 fn push_u32_slice(bytes: &mut Vec<u8>, values: &[u32]) -> Result<()> {
     push_u32(bytes, usize_to_u32(values.len(), "u32 slice length")?);
-    // Zero-copy: cast the u32 slice to bytes and extend in one memcpy.
-    // Previous version called push_u32 per element (100K calls for large DFAs).
-    bytes.extend_from_slice(bytemuck::cast_slice(values));
+    bytes.reserve(values.len() * 4);
+    for &value in values {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
     Ok(())
 }
 
@@ -173,7 +174,9 @@ fn push_prefilter_table(bytes: &mut Vec<u8>, table: &LiteralPrefilterTable) -> R
 }
 
 fn push_u32_array_256(bytes: &mut Vec<u8>, values: &[u32; 256]) {
-    bytes.extend_from_slice(bytemuck::cast_slice(values));
+    for &value in values {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
 }
 
 pub(crate) fn usize_to_u32(value: usize, label: &str) -> Result<u32> {

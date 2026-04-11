@@ -110,3 +110,40 @@ proptest! {
         );
     }
 }
+
+/// Targeted diagnostic: prefix overlap patterns must produce identical matches.
+#[test]
+fn prefix_overlap_parity_diagnostic() {
+    let patterns = vec![
+        "p".to_string(),
+        "p6".to_string(),
+        "0AAaa0a0a0AaAA0a0".to_string(),
+    ];
+    let input = "FcGGQTS22K Ls7n 1O47KCApkz E0lG3Vwp69jsHAw3 j4i2Y6AD DB8 sUSH WlYem eaT87 I DEu3K7o5a7Sk U78 V  zUf2w8XQkf443Ecj4J Uupk7 eJJNWh d v 0 D  J pUyv579Y22aqPIvNt1a2v cPbIc 59 k0svYpgyJ55 2TL GW yL5 PHr55P7SDbw47NTaLCGP96 6vU6Mco wYHiJx u3 U oek4wx4  lkuAjvZ sIWN1 P eM1 i1Go P M4m9Q JXFRS3S3udH6kW639D475N k k t81ECl 9OgckMkXoV1 Aii 48h4  zmnN8 e4  Zpvvxhg3XaTi7 7xG1agam6AxW aye8b   jt RCJ0  410z4E0 STE  UrV1";
+
+    let mut builder = PatternSet::builder();
+    for p in &patterns {
+        builder = builder.literal(p);
+    }
+    let ps = builder.build().unwrap();
+    let bytes = CompiledPatternIndex::build(&ps).unwrap();
+    let index = CompiledPatternIndex::load(&bytes).unwrap();
+
+    let input_bytes = input.as_bytes();
+    let orig = ps.scan(input_bytes).unwrap();
+    let idx = index.scan(input_bytes).unwrap();
+
+    assert_eq!(
+        orig.len(),
+        idx.len(),
+        "Match count differs: orig={orig:?}, idx={idx:?}"
+    );
+    for (i, (o, x)) in orig.iter().zip(idx.iter()).enumerate() {
+        assert_eq!(
+            o.pattern_id, x.pattern_id,
+            "Pattern ID mismatch at match {i}: orig={o:?}, idx={x:?}"
+        );
+        assert_eq!(o.start, x.start, "Start mismatch at match {i}");
+        assert_eq!(o.end, x.end, "End mismatch at match {i}");
+    }
+}

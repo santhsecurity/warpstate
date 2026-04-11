@@ -3,7 +3,6 @@
 //! Complete mathematical isolation from physical execution engines. Evaluates overlaps,
 //! prevents undefined sliding window bounds, and perfectly constructs matching
 //! datasets across boundaries mapped abstractly via generic BlockMatcher.
-#![allow(unsafe_code)]
 
 #[cfg(feature = "gpu")]
 use crate::{
@@ -48,7 +47,7 @@ impl<T: ZeroCopyBlockMatcher + Send + Sync> StreamPipeline<T> {
 ///
 /// ```rust,no_run
 /// # async fn example(
-/// #     pipeline: &warpstate::StreamPipeline<warpstate::PersistentMatcher>,
+/// #     pipeline: &warpstate::StreamPipeline<impl matchkit::BlockMatcher + Send + Sync>,
 /// #     data: &[u8],
 /// # ) -> warpstate::Result<Vec<warpstate::Match>> {
 /// let mut scan = pipeline.scan_zero_copy(data.len())?;
@@ -70,22 +69,9 @@ impl<T: ZeroCopyBlockMatcher + Send + Sync> ZeroCopyScan<'_, T> {
         self.staging.as_mut_slice()
     }
 
-    /// Returns the raw mapped pointer and logical writable length.
-    pub fn mapped_parts(&mut self) -> (*mut u8, usize) {
-        self.staging.mapped_parts()
-    }
-
     /// Construct an external buffer adapter directly over the mapped region.
-    ///
-    /// # Safety
-    ///
-    /// The constructed buffer must not outlive this scan session and must not be used after
-    /// [`finish`](Self::finish) flushes the staging buffer to VRAM.
-    pub unsafe fn external_buffer<B: FromMappedBuffer>(&mut self) -> B {
-        let (ptr, len) = self.mapped_parts();
-        // SAFETY: The caller is responsible for honoring the returned buffer's lifetime and
-        // aliasing requirements relative to this scan session.
-        unsafe { B::from_mapped_buffer(ptr, len) }
+    pub fn external_buffer<B: FromMappedBuffer>(&mut self) -> B {
+        B::from_mapped_buffer(self.mapped_mut())
     }
 
     /// Flush the staging buffer and dispatch the backend.

@@ -1285,22 +1285,21 @@ fn gpu_input_too_large_rejection() {
     // If we throw an input larger than the max supported memory,
     // we MUST get an InputTooLarge error, and not an OS-level OOM panic.
     //
-    // Use regex() instead of literal() to ensure PersistentMatcher finds a RegexDFA.
+    // Use regex() instead of literal() to exercise the consolidated regex GPU path.
     let ps = PatternSet::builder().regex("target").build().unwrap();
 
-    // Create a PersistentMatcher with a tiny max to simulate the edge case.
+    // Create a GpuMatcher with a tiny max to simulate the edge case.
     let tiny_config = AutoMatcherConfig::default().gpu_max_input_size(1024);
 
-    let tiny_matcher = match pollster::block_on(
-        warpstate::persistent::PersistentMatcher::with_config(&ps, tiny_config),
-    ) {
-        Ok(matcher) => matcher,
-        Err(Error::NoGpuAdapter) => return, // No GPU available, skip this test.
-        Err(other) => panic!("Unexpected matcher construction error: {other:?}"),
-    };
+    let tiny_matcher =
+        match pollster::block_on(warpstate::GpuMatcher::with_config(&ps, tiny_config)) {
+            Ok(matcher) => matcher,
+            Err(Error::NoGpuAdapter) => return, // No GPU available, skip this test.
+            Err(other) => panic!("Unexpected matcher construction error: {other:?}"),
+        };
 
     // Bypass stream abstraction and force push into the raw block processor.
-    use warpstate::matcher::BlockMatcher;
+    use warpstate::BlockMatcher;
     let data = vec![0u8; 1025];
     let result = pollster::block_on(tiny_matcher.scan_block(&data));
 

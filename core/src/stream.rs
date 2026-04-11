@@ -82,13 +82,21 @@ impl StreamScanner {
         self.window[overlap_len..].copy_from_slice(chunk);
 
         let mut matches = Vec::with_capacity(cpu::estimated_match_capacity(self.window.len()));
+        let mut truncated = false;
         cpu::scan_with(self.patterns.ir(), &self.window, &mut |mat| {
             if matches.len() >= cpu::MAX_CPU_MATCHES {
+                truncated = true;
                 return false;
             }
             matches.push(mat);
             true
         })?;
+        if truncated {
+            return Err(Error::MatchBufferOverflow {
+                count: cpu::MAX_CPU_MATCHES,
+                max: cpu::MAX_CPU_MATCHES,
+            });
+        }
         cpu::sort_matches_if_needed(&mut matches);
         // SAFETY: processed_bytes >= overlap_len because overlap is always filled
         // from previously processed data. saturating_sub is a zero-cost safety net.
@@ -157,7 +165,6 @@ mod tests {
                 pattern_id: 0,
                 start: 0,
                 end: 4,
-                padding: 0,
             }]
         );
         assert!(scanner.finish().unwrap().is_empty());
@@ -177,7 +184,6 @@ mod tests {
                 pattern_id: 0,
                 start: 2,
                 end: 6,
-                padding: 0,
             }]
         );
     }
@@ -197,7 +203,6 @@ mod tests {
                 pattern_id: 0,
                 start: 0,
                 end: 3,
-                padding: 0,
             }]
         );
     }
@@ -218,7 +223,6 @@ mod tests {
                 pattern_id: 0,
                 start: 0,
                 end: 6,
-                padding: 0,
             }]
         );
         assert!(scanner.finish().unwrap().is_empty());

@@ -1,13 +1,11 @@
-use wgpu::util::DeviceExt;
-
 use std::collections::HashSet;
 
 use crate::error::{Error, Result};
-use crate::gpu::ensemble::{EnsembleRegexMatcher, SmallDfa};
 use crate::gpu::device::{self, GpuBufferPool};
+use crate::gpu::ensemble::{EnsembleRegexMatcher, SmallDfa};
 use crate::gpu::readback;
+use crate::gpu::shader;
 use crate::pattern::PatternSet;
-use crate::shader;
 use crate::Match;
 
 #[repr(C)]
@@ -19,18 +17,6 @@ pub(crate) struct LiteralUniforms {
     pub hash_window_len: u32,
     pub reserved0: u32,
     pub _padding: [u32; 3],
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct RegexUniforms {
-    pub input_len: u32,
-    pub start_state: u32,
-    pub max_matches: u32,
-    pub class_count: u32,
-    pub eoi_class: u32,
-    pub _padding: [u32; 7],
-    pub byte_classes: [[u32; 4]; 64],
 }
 
 /// GPU resources for literal prefilter+verify matching.
@@ -57,15 +43,6 @@ pub struct RegexGpu {
     pub(crate) small_dfas: Vec<SmallDfa>,
 }
 
-/// Specialized regex GPU with transitions embedded as shader constants.
-/// Fewer bindings, better GPU compiler optimization, no buffer indirection.
-#[derive(Debug)]
-pub struct SpecializedRegexGpu {
-    pub(crate) pipeline: wgpu::ComputePipeline,
-    pub(crate) layout: wgpu::BindGroupLayout,
-    pub(crate) pattern_ids: Vec<usize>,
-}
-
 impl Drop for LiteralGpu {
     fn drop(&mut self) {
         self.pattern_bytes_buf.destroy();
@@ -74,16 +51,6 @@ impl Drop for LiteralGpu {
         self.prefilter_bucket_ranges_buf.destroy();
         self.prefilter_entries_buf.destroy();
     }
-}
-
-/// Uniforms for the specialized DFA shader (transitions are in constants).
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct SpecializedRegexUniforms {
-    pub input_len: u32,
-    pub max_matches: u32,
-    pub _padding0: u32,
-    pub _padding1: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -135,12 +102,13 @@ pub(crate) async fn scan_literal_chunk(
         8, // 2 x u32: count + overflow flag
         candidate_count_usage,
     );
-    let match_buf_size = u64::from(max_matches)
-        .checked_mul(16)
-        .ok_or_else(|| Error::InputTooLarge {
-            bytes: usize::MAX,
-            max_bytes: max_input_size,
-        })?;
+    let match_buf_size =
+        u64::from(max_matches)
+            .checked_mul(16)
+            .ok_or_else(|| Error::InputTooLarge {
+                bytes: usize::MAX,
+                max_bytes: max_input_size,
+            })?;
     let match_usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
     let match_buf = buffer_pool.get_or_create(
         device,
@@ -281,18 +249,20 @@ pub(crate) async fn scan_literal_chunk(
             let mut matches = pattern_set.scan(data)?;
             let literal_pattern_ids: HashSet<usize> = literal.pattern_ids.iter().copied().collect();
             for mat in &mut matches {
-                let start_offset = base_offset_u32
-                    .checked_add(mat.start)
-                    .ok_or(Error::InputTooLarge {
-                        bytes: usize::MAX,
-                        max_bytes: u32::MAX as usize,
-                    })?;
-                let end_offset = base_offset_u32
-                    .checked_add(mat.end)
-                    .ok_or(Error::InputTooLarge {
-                        bytes: usize::MAX,
-                        max_bytes: u32::MAX as usize,
-                    })?;
+                let start_offset =
+                    base_offset_u32
+                        .checked_add(mat.start)
+                        .ok_or(Error::InputTooLarge {
+                            bytes: usize::MAX,
+                            max_bytes: u32::MAX as usize,
+                        })?;
+                let end_offset =
+                    base_offset_u32
+                        .checked_add(mat.end)
+                        .ok_or(Error::InputTooLarge {
+                            bytes: usize::MAX,
+                            max_bytes: u32::MAX as usize,
+                        })?;
 
                 mat.start = start_offset;
                 mat.end = end_offset;
@@ -386,7 +356,10 @@ pub(crate) async fn scan_regex_chunk(
 
     let matched = regex.matcher.scan_async(data, &regex.small_dfas).await?;
     let mut matches = Vec::new();
-    for (matched_regex, dfa) in matched.into_iter().zip(pattern_set.ir().regex_dfas().iter()) {
+    for (matched_regex, dfa) in matched
+        .into_iter()
+        .zip(pattern_set.ir().regex_dfas().iter())
+    {
         if !matched_regex {
             continue;
         }
@@ -404,110 +377,4 @@ pub(crate) async fn scan_regex_chunk(
         })?;
     }
     Ok(matches)
-}
-
-/// Scan using the specialized constant-embedded DFA shader.
-/// This path has no transition buffer — all DFA data is baked into WGSL constants.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn scan_specialized_regex_chunk(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    buffer_pool: &GpuBufferPool,
-    specialized: &SpecializedRegexGpu,
-    data: &[u8],
-    base_offset: usize,
-    max_matches: u32,
-    max_input_size: usize,
-) -> Result<Vec<Match>> {
-    let input_len = super::to_u32_len(data.len(), max_input_size)?;
-    let workgroups = compute_workgroups(device, input_len)?;
-    let packed_input = device::pad_to_u32(data);
-    let input_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("warpstate specialized regex input"),
-        contents: device::packed_u32_as_bytes(&packed_input),
-        usage: wgpu::BufferUsages::STORAGE,
-    });
-    let match_buf_size = u64::from(max_matches)
-        .checked_mul(16)
-        .ok_or_else(|| Error::InputTooLarge {
-            bytes: usize::MAX,
-            max_bytes: max_input_size,
-        })?;
-    let match_usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
-    let match_buf = buffer_pool.get_or_create(
-        device,
-        "warpstate specialized regex matches",
-        match_buf_size,
-        match_usage,
-    );
-    let count_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("warpstate specialized regex count"),
-        contents: bytemuck::cast_slice(&[0u32, 0u32]),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-    });
-    let uniforms = SpecializedRegexUniforms {
-        input_len,
-        max_matches,
-        _padding0: 0,
-        _padding1: 0,
-    };
-    let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("warpstate specialized regex uniforms"),
-        contents: bytemuck::bytes_of(&uniforms),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("warpstate specialized regex bind group"),
-        layout: &specialized.layout,
-        entries: &[
-            device::entry(0, &input_buf),
-            device::entry(1, &match_buf),
-            device::entry(2, &count_buf),
-            device::entry(3, &uniform_buf),
-        ],
-    });
-
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("warpstate specialized regex encoder"),
-    });
-    {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("warpstate specialized regex pass"),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(&specialized.pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(workgroups.x, workgroups.y, workgroups.z);
-    }
-    let count_staging =
-        device::readback_buffer(device, 8, "warpstate specialized regex count staging");
-    encoder.copy_buffer_to_buffer(&count_buf, 0, &count_staging, 0, 8);
-    let match_staging = device::readback_buffer(
-        device,
-        match_buf_size,
-        "warpstate specialized regex match staging",
-    );
-    encoder.copy_buffer_to_buffer(&match_buf, 0, &match_staging, 0, match_buf_size);
-    queue.submit(Some(encoder.finish()));
-
-    let result = readback::read_matches(
-        device,
-        queue,
-        &count_staging,
-        &match_staging,
-        Some(&specialized.pattern_ids),
-        base_offset,
-        max_matches,
-        data.len(),
-    )
-    .await;
-
-    count_staging.destroy();
-    match_staging.destroy();
-    input_buf.destroy();
-    count_buf.destroy();
-    uniform_buf.destroy();
-    buffer_pool.return_buffer(match_buf, match_usage);
-
-    result
 }

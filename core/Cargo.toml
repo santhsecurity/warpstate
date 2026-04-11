@@ -183,6 +183,10 @@ name = "unit_regression_suite"
 path = "tests/unit/regression_suite.rs"
 
 [[test]]
+name = "unit_surge_regex_regression"
+path = "tests/unit/surge_regex_regression.rs"
+
+[[test]]
 name = "unit_specialize_parity"
 path = "tests/unit/specialize_parity.rs"
 
@@ -257,4 +261,3 @@ path = "tests/property/proptest_parity.rs"
 [[test]]
 name = "property_proptest_scan"
 path = "tests/property/proptest_scan.rs"
-

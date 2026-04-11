@@ -3,7 +3,7 @@ use aho_corasick::AhoCorasick;
 use super::{check_input_size, sort_matches_if_needed, MAX_CPU_INPUT_BYTES, MAX_CPU_MATCHES};
 use crate::error::{Error, Result};
 use crate::hash_scan::HashScanner;
-use crate::pattern::{CompiledPatternKind, PatternIR};
+use crate::pattern::PatternIR;
 use crate::Match;
 
 /// Non-overlapping scan — SIMD-accelerated Teddy prefilters enabled.
@@ -83,7 +83,6 @@ where
                     pattern_id,
                     start: s,
                     end: e,
-                    padding: 0,
                 }) {
                     return Ok(());
                 }
@@ -135,17 +134,16 @@ pub(crate) fn scan_single_literal_with_finder(
                 max: out_matches.len().min(MAX_CPU_MATCHES),
             });
         }
-        // SAFETY: pos < data.len() which is validated <= u32::MAX by check_input_size
         #[allow(clippy::cast_possible_truncation)]
         let start = pos as u32;
-        // SAFETY: pos < data.len() which is validated <= u32::MAX by check_input_size
-        #[allow(clippy::cast_possible_truncation)]
-        let end = (pos as u32).saturating_add(needle_len);
+        let end = start.checked_add(needle_len).ok_or(Error::InputTooLarge {
+            bytes: pos.saturating_add(needle_len as usize),
+            max_bytes: MAX_CPU_INPUT_BYTES,
+        })?;
         out_matches[count] = Match {
             pattern_id,
             start,
             end,
-            padding: 0,
         };
         count += 1;
     }
@@ -170,7 +168,8 @@ where
         }
     })?;
     let pattern_id = u32::try_from(pattern_id).map_err(|_| Error::PatternCompilationFailed {
-        reason: "single-literal pattern ID exceeds u32::MAX. Fix: rebuild the pattern set.".to_string(),
+        reason: "single-literal pattern ID exceeds u32::MAX. Fix: rebuild the pattern set."
+            .to_string(),
     })?;
     // needle_len is bounded by the literal length which is reasonable
     #[allow(clippy::cast_possible_truncation)]
@@ -182,17 +181,16 @@ where
                 max: MAX_CPU_MATCHES,
             });
         }
-        // SAFETY: pos < data.len() which is validated <= u32::MAX by check_input_size
         #[allow(clippy::cast_possible_truncation)]
         let start = pos as u32;
-        // SAFETY: pos < data.len() which is validated <= u32::MAX by check_input_size
-        #[allow(clippy::cast_possible_truncation)]
-        let end = (pos as u32).saturating_add(needle_len);
+        let end = start.checked_add(needle_len).ok_or(Error::InputTooLarge {
+            bytes: pos.saturating_add(needle_len as usize),
+            max_bytes: MAX_CPU_INPUT_BYTES,
+        })?;
         if !visitor(Match {
             pattern_id,
             start,
             end,
-            padding: 0,
         }) {
             break;
         }
@@ -287,7 +285,6 @@ where
             pattern_id,
             start,
             end,
-            padding: 0,
         }) {
             break;
         }
@@ -297,9 +294,8 @@ where
 
 /// Overlapping literal scan — visits every byte position.
 ///
-/// Rebuilds the Aho-Corasick automaton with `MatchKind::Standard` because
-/// the primary automaton uses `LeftmostFirst` (for Teddy SIMD prefilters)
-/// which does not support `find_overlapping_iter`.
+/// Uses the `MatchKind::Standard` automaton because leftmost match kinds do not
+/// support `find_overlapping_iter`.
 #[inline]
 fn scan_literals_overlapping(
     ir: &PatternIR,
@@ -346,7 +342,6 @@ fn scan_literals_overlapping(
             pattern_id,
             start,
             end,
-            padding: 0,
         };
         count += 1;
     }
@@ -383,7 +378,6 @@ pub fn scan_aho_corasick(
             pattern_id,
             start,
             end,
-            padding: 0,
         };
         count += 1;
     }
@@ -418,7 +412,6 @@ pub fn scan_aho_corasick_overlapping(
             pattern_id,
             start,
             end,
-            padding: 0,
         };
         count += 1;
     }

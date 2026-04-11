@@ -247,7 +247,7 @@ impl PatternSetBuilder {
         } else if self.ascii_case_insensitive {
             Some(
                 aho_corasick::AhoCorasick::builder()
-                    .match_kind(aho_corasick::MatchKind::LeftmostFirst)
+                    .match_kind(aho_corasick::MatchKind::LeftmostLongest)
                     .ascii_case_insensitive(true)
                     .build(&literal_patterns)
                     .map_err(|error| Error::PatternCompilationFailed {
@@ -260,7 +260,7 @@ impl PatternSetBuilder {
                     // Use LeftmostLongest to ensure all patterns are found.
                     // LeftmostFirst can silently skip patterns when shorter patterns
                     // at the same position shadow longer ones in a large pattern set.
-                    .match_kind(aho_corasick::MatchKind::LeftmostFirst)
+                    .match_kind(aho_corasick::MatchKind::LeftmostLongest)
                     .build(&literal_patterns)
                     .map_err(|error| Error::PatternCompilationFailed {
                         reason: error.to_string(),
@@ -290,16 +290,19 @@ impl PatternSetBuilder {
             )?;
 
         // Build cached CI regex before moving values into PatternIR
-        let fast_ci_regex =
-            if self.ascii_case_insensitive && offsets.len() == 1 && regex_dfas.is_empty() {
-                let (start, len) = offsets[0];
-                let needle = &packed_bytes[start as usize..(start + len) as usize];
-                std::str::from_utf8(needle).ok().and_then(|s| {
-                    regex::bytes::Regex::new(&format!("(?i:{})", regex_syntax::escape(s))).ok()
-                })
-            } else {
-                None
-            };
+        let fast_ci_regex = if self.ascii_case_insensitive
+            && offsets.len() == 1
+            && regex_dfas.is_empty()
+        {
+            let (start, len) = offsets[0];
+            let needle = &packed_bytes[start as usize..(start + len) as usize];
+            std::str::from_utf8(needle).ok().and_then(|s| {
+                crate::regex_engine::build_byte_regex(&format!("(?i:{})", regex_syntax::escape(s)))
+                    .ok()
+            })
+        } else {
+            None
+        };
 
         // Pre-build hash scanner for large literal sets (avoids per-scan rebuild).
         let ir = PatternIR {

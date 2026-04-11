@@ -2,14 +2,18 @@
 
 /// GPU matcher construction helpers.
 pub mod builder;
-/// Shared-memory regex ensemble backend.
-pub mod ensemble;
 /// GPU device acquisition and shared buffer utilities.
 pub mod device;
 /// GPU scan dispatch paths for literal/regex kernels.
 pub mod dispatch;
+/// Shared-memory regex ensemble backend.
+pub mod ensemble;
 /// GPU buffer map/readback helpers.
 pub mod readback;
+/// Shareable synchronous GPU scanner.
+mod scanner;
+/// WGSL shader generation used by the consolidated GPU backend.
+pub(crate) mod shader;
 #[cfg(test)]
 #[cfg(not(miri))]
 mod tests;
@@ -22,15 +26,15 @@ use arc_swap::ArcSwap;
 use crate::config::AutoMatcherConfig;
 use crate::error::{Error, Result};
 use crate::pattern::PatternSet;
-use crate::shader;
 use crate::Match;
 
-use self::builder::{build_literal_gpu, build_regex_gpu, build_specialized_regex_gpu};
+use self::builder::{build_literal_gpu, build_regex_gpu};
 use self::device::GpuBufferPool;
 pub(crate) use self::device::{
     acquire_device, adapter_is_software, adapter_is_unsupported, SharedDeviceQueue,
 };
-use self::dispatch::{LiteralGpu, RegexGpu, SpecializedRegexGpu};
+use self::dispatch::{LiteralGpu, RegexGpu};
+pub use scanner::GpuScanner;
 
 /// Returns `true` if the error may be resolved by recreating the GPU device.
 fn is_recoverable_gpu_error(error: &Error) -> bool {
@@ -68,7 +72,6 @@ struct GpuState {
     queue: wgpu::Queue,
     literal: Option<LiteralGpu>,
     regex: Option<RegexGpu>,
-    specialized_regex: Option<SpecializedRegexGpu>,
     buffer_pool: GpuBufferPool,
 }
 
@@ -185,20 +188,13 @@ impl GpuMatcher {
             .min(effective_max_input.saturating_sub(chunk_overlap).max(1));
 
         let literal = build_literal_gpu(&device, patterns)?;
-        // Try specialized shader first (DFA constants in WGSL), fall back to buffer-based
-        let specialized_regex = build_specialized_regex_gpu(&device, patterns)?;
-        let regex = if specialized_regex.is_some() {
-            None // Don't build buffer-based if specialized succeeds
-        } else {
-            build_regex_gpu(&device, &queue, patterns)?
-        };
+        let regex = build_regex_gpu(&device, &queue, patterns)?;
 
         let state = GpuState {
             device,
             queue,
             literal,
             regex,
-            specialized_regex,
             buffer_pool: GpuBufferPool::default(),
         };
 
@@ -333,19 +329,13 @@ impl GpuMatcher {
         let (device, queue) = (device_queue.0.clone(), device_queue.1.clone());
 
         let literal = build_literal_gpu(&device, &self.patterns)?;
-        let specialized_regex = build_specialized_regex_gpu(&device, &self.patterns)?;
-        let regex = if specialized_regex.is_some() {
-            None
-        } else {
-            build_regex_gpu(&device, &queue, &self.patterns)?
-        };
+        let regex = build_regex_gpu(&device, &queue, &self.patterns)?;
 
         let state = GpuState {
             device,
             queue,
             literal,
             regex,
-            specialized_regex,
             buffer_pool: GpuBufferPool::default(),
         };
 
@@ -361,7 +351,7 @@ impl GpuMatcher {
 
     fn has_regex_pipeline(&self) -> bool {
         let state = self.state.load_full();
-        state.regex.is_some() || state.specialized_regex.is_some()
+        state.regex.is_some()
     }
 
     async fn scan_chunk(&self, data: &[u8], base_offset: usize) -> Result<Vec<Match>> {
@@ -380,22 +370,7 @@ impl GpuMatcher {
                 .await?,
             );
         }
-        // Prefer specialized regex (constants in shader) over buffer-based
-        if let Some(specialized) = &state.specialized_regex {
-            matches.extend(
-                dispatch::scan_specialized_regex_chunk(
-                    &state.device,
-                    &state.queue,
-                    &state.buffer_pool,
-                    specialized,
-                    data,
-                    base_offset,
-                    self.max_matches,
-                    self.max_input_size,
-                )
-                .await?,
-            );
-        } else if let Some(regex) = &state.regex {
+        if let Some(regex) = &state.regex {
             matches.extend(
                 self.scan_regex_chunk(
                     &state.device,
@@ -455,6 +430,17 @@ impl GpuMatcher {
             self.max_regex_input_size,
         )
         .await
+    }
+}
+
+#[async_trait::async_trait]
+impl matchkit::BlockMatcher for GpuMatcher {
+    async fn scan_block(&self, data: &[u8]) -> matchkit::Result<Vec<Match>> {
+        self.scan(data).await.map_err(Into::into)
+    }
+
+    fn max_block_size(&self) -> usize {
+        self.chunk_size
     }
 }
 

@@ -70,7 +70,7 @@ impl LengthGroupAligned {
         table_size = table_size.next_power_of_two();
 
         // Prevent unbounded table growth for very large literal sets.
-        if table_size > (1 << 28) {
+        if table_size > (1 << 24) {
             return Err(Error::PatternCompilationFailed {
                 reason: format!(
                     "literal hash table would be too large ({table_size} entries). Fix: rebuild the pattern set with fewer literals."
@@ -200,7 +200,6 @@ impl LengthGroupAligned {
                         pattern_id,
                         start: start_u32,
                         end: end_u32,
-                        padding: 0,
                     });
                 }
             }
@@ -229,7 +228,9 @@ impl HashScanner {
     pub fn build(ir: &PatternIR) -> crate::error::Result<Self> {
         if ir.offsets.len() != ir.literal_automaton_ids.len() {
             return Err(Error::PatternCompilationFailed {
-                reason: "literal hash scanner metadata length mismatch. Fix: rebuild the pattern set.".to_string(),
+                reason:
+                    "literal hash scanner metadata length mismatch. Fix: rebuild the pattern set."
+                        .to_string(),
             });
         }
 
@@ -301,9 +302,7 @@ impl HashScanner {
 
         let groups = grouped
             .into_iter()
-            .map(|(length, patterns)| {
-                LengthGroup::new(length, patterns, &offsets, &packed_bytes)
-            })
+            .map(|(length, patterns)| LengthGroup::new(length, patterns, &offsets, &packed_bytes))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
@@ -347,8 +346,6 @@ impl HashScanner {
                     shortest_end = shortest_end.min(end);
                 }
 
-                // If we've found matches with a shorter or equal length group,
-                // no point checking longer groups.
                 if shortest_end <= end {
                     break;
                 }
@@ -563,7 +560,7 @@ mod adversarial_tests {
         let hash_matches = scanner.scan(data);
 
         // HashScanner reports each duplicate pattern separately (2 matches),
-        // while Aho-Corasick LeftmostFirst deduplicates (1 match). Both find
+        // while Aho-Corasick leftmost matching deduplicates (1 match). Both find
         // the match at the correct position. HashScanner's behavior is correct
         // for security scanning where each pattern ID matters independently.
         assert!(

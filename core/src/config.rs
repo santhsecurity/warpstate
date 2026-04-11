@@ -1,4 +1,4 @@
-//! Configuration for auto-routed and GPU-backed scans.
+//! Configuration for GPU-backed scans.
 
 /// Default maximum input size per GPU chunk in bytes (128 MB).
 pub const DEFAULT_MAX_INPUT_SIZE: usize = 128 * 1024 * 1024;
@@ -43,7 +43,6 @@ pub struct AutoMatcherConfig {
     pub(crate) max_matches: u32,
     pub(crate) chunk_size: usize,
     pub(crate) chunk_overlap: usize,
-    pub(crate) auto_tune_threshold: bool,
     pub(crate) max_scan_depth: Option<u32>,
 }
 
@@ -56,7 +55,6 @@ impl Default for AutoMatcherConfig {
             max_matches: DEFAULT_MAX_MATCHES,
             chunk_size: DEFAULT_CHUNK_SIZE,
             chunk_overlap: DEFAULT_CHUNK_OVERLAP,
-            auto_tune_threshold: true,
             max_scan_depth: None,
         }
     }
@@ -69,14 +67,19 @@ impl AutoMatcherConfig {
     }
 
     /// Set the routing threshold where GPU becomes eligible.
+    ///
+    /// A value of `0` is promoted to `1` so empty inputs and tiny buffers do not
+    /// force GPU dispatch.
     pub fn gpu_threshold(mut self, threshold: usize) -> Self {
-        self.gpu_threshold = threshold;
+        self.gpu_threshold = threshold.max(1);
         self
     }
 
     /// Set the maximum input size eligible for routing to the GPU.
+    ///
+    /// A value of `0` disables no useful GPU work, so it is promoted to `1`.
     pub fn gpu_max_input_size(mut self, bytes: usize) -> Self {
-        self.gpu_max_input_size = bytes;
+        self.gpu_max_input_size = bytes.max(1);
         self
     }
 
@@ -93,20 +96,19 @@ impl AutoMatcherConfig {
     }
 
     /// Set the chunk size used by the GPU scanner.
+    ///
+    /// A value of `0` is promoted to `1`.
     pub fn chunk_size(mut self, bytes: usize) -> Self {
         self.chunk_size = bytes.max(1);
+        if self.chunk_overlap >= self.chunk_size {
+            self.chunk_overlap = self.chunk_size.saturating_sub(1);
+        }
         self
     }
 
     /// Set chunk overlap used to preserve matches across chunk boundaries.
     pub fn chunk_overlap(mut self, bytes: usize) -> Self {
-        self.chunk_overlap = bytes;
-        self
-    }
-
-    /// Enable or disable first-scan threshold auto-tuning.
-    pub fn auto_tune_threshold(mut self, enabled: bool) -> Self {
-        self.auto_tune_threshold = enabled;
+        self.chunk_overlap = bytes.min(self.chunk_size.saturating_sub(1));
         self
     }
 
@@ -146,11 +148,6 @@ impl AutoMatcherConfig {
         self.chunk_overlap
     }
 
-    /// Whether threshold auto-tuning is enabled.
-    pub fn is_auto_tune_threshold_enabled(&self) -> bool {
-        self.auto_tune_threshold
-    }
-
     /// Get the configured max scan depth.
     pub fn configured_max_scan_depth(&self) -> Option<u32> {
         self.max_scan_depth
@@ -161,12 +158,12 @@ impl AutoMatcherConfig {
     /// Unlike [`gpu_threshold`](Self::gpu_threshold) (which consumes `self`),
     /// this borrows mutably — avoiding a clone when modifying post-construction.
     pub fn set_gpu_threshold(&mut self, threshold: usize) {
-        self.gpu_threshold = threshold;
+        self.gpu_threshold = threshold.max(1);
     }
 
     /// Mutate the GPU max input size in-place.
     pub fn set_gpu_max_input_size(&mut self, bytes: usize) {
-        self.gpu_max_input_size = bytes;
+        self.gpu_max_input_size = bytes.max(1);
     }
 
     /// Mutate the GPU max regex input size in-place.
@@ -188,7 +185,6 @@ mod tests {
             DEFAULT_MAX_INPUT_SIZE
         );
         assert_eq!(config.configured_max_matches(), DEFAULT_MAX_MATCHES);
-        assert!(config.is_auto_tune_threshold_enabled());
     }
 
     #[test]
@@ -198,15 +194,13 @@ mod tests {
             .gpu_max_input_size(2048)
             .max_matches(4096)
             .chunk_size(8192)
-            .chunk_overlap(128)
-            .auto_tune_threshold(false);
+            .chunk_overlap(128);
 
         assert_eq!(config.configured_gpu_threshold(), 1024);
         assert_eq!(config.configured_gpu_max_input_size(), 2048);
         assert_eq!(config.configured_max_matches(), 4096);
         assert_eq!(config.configured_chunk_size(), 8192);
         assert_eq!(config.configured_chunk_overlap(), 128);
-        assert!(!config.is_auto_tune_threshold_enabled());
     }
 
     // === Adversarial Config Tests ===
@@ -231,18 +225,18 @@ mod tests {
             .chunk_size(1)
             .chunk_overlap(0);
 
-        assert_eq!(config.configured_gpu_threshold(), 0);
+        assert_eq!(config.configured_gpu_threshold(), 1);
         assert_eq!(config.configured_gpu_max_input_size(), 1);
         assert_eq!(config.configured_max_matches(), 1);
         assert_eq!(config.configured_chunk_size(), 1);
         assert_eq!(config.configured_chunk_overlap(), 0);
     }
 
-    /// Test zero input size is allowed (edge case)
+    /// Test zero input size is promoted to a safe minimum.
     #[test]
     fn config_zero_input_size() {
         let config = AutoMatcherConfig::new().gpu_max_input_size(0);
-        assert_eq!(config.configured_gpu_max_input_size(), 0);
+        assert_eq!(config.configured_gpu_max_input_size(), 1);
     }
 
     /// Test huge chunk size is handled
@@ -277,14 +271,12 @@ mod tests {
         let config = AutoMatcherConfig::new()
             .gpu_threshold(1234)
             .gpu_max_input_size(5678)
-            .max_matches(9999)
-            .auto_tune_threshold(false);
+            .max_matches(9999);
 
         let cloned = config.clone();
         assert_eq!(cloned.configured_gpu_threshold(), 1234);
         assert_eq!(cloned.configured_gpu_max_input_size(), 5678);
         assert_eq!(cloned.configured_max_matches(), 9999);
-        assert!(!cloned.is_auto_tune_threshold_enabled());
     }
 
     /// Test equality

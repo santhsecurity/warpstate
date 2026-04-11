@@ -2,11 +2,9 @@
 
 use std::sync::Arc;
 
+use super::GpuMatcher;
 use crate::scanner::ByteScanner;
 use crate::{Match, PatternSet, Result};
-
-#[cfg(feature = "gpu")]
-use crate::GpuMatcher;
 
 /// Shared synchronous scanner for production pipelines.
 ///
@@ -15,11 +13,9 @@ use crate::GpuMatcher;
 #[derive(Debug, Clone)]
 pub struct GpuScanner {
     patterns: Arc<PatternSet>,
-    #[cfg(feature = "gpu")]
     backend: Arc<Backend>,
 }
 
-#[cfg(feature = "gpu")]
 #[derive(Debug)]
 enum Backend {
     Gpu(Arc<GpuMatcher>),
@@ -36,7 +32,6 @@ impl GpuScanner {
     /// Create a scanner from a shared [`PatternSet`].
     #[must_use]
     pub fn from_arc(patterns: Arc<PatternSet>) -> Self {
-        #[cfg(feature = "gpu")]
         let backend = match create_gpu_backend(patterns.as_ref()) {
             Ok(gpu) => Arc::new(Backend::Gpu(Arc::new(gpu))),
             Err(error) => Arc::new(Backend::InitializationFailed {
@@ -44,39 +39,26 @@ impl GpuScanner {
             }),
         };
 
-        Self {
-            patterns,
-            #[cfg(feature = "gpu")]
-            backend,
-        }
+        Self { patterns, backend }
     }
 
     /// Scan `data` using the GPU matcher.
     #[allow(clippy::needless_return)] // Returns needed for #[cfg(feature)] branching
     pub fn scan(&self, data: &[u8]) -> Result<Vec<Match>> {
-        #[cfg(feature = "gpu")]
-        {
-            match self.backend.as_ref() {
-                Backend::Gpu(gpu) => {
-                    // GpuMatcher handles BOTH literals (prefilter+verify shaders)
-                    // AND regex DFAs (specialized const-embedded shader or buffer-based
-                    // DFA shader). No CPU fallback needed — the GPU processes everything.
-                    return gpu.scan_blocking(data);
-                }
-                Backend::InitializationFailed { reason } => {
-                    return Err(crate::Error::GpuDeviceError {
-                        reason: format!(
-                            "GPU scanner initialization failed: {reason}. \
-                             Fix: verify GPU drivers are installed and wgpu can access the adapter. \
-                             Use PatternSet::scan() for CPU-only scanning."
-                        ),
-                    });
-                }
+        match self.backend.as_ref() {
+            Backend::Gpu(gpu) => {
+                return gpu.scan_blocking(data);
+            }
+            Backend::InitializationFailed { reason } => {
+                return Err(crate::Error::GpuDeviceError {
+                    reason: format!(
+                        "GPU scanner initialization failed: {reason}. \
+                         Fix: verify GPU drivers are installed and wgpu can access the adapter. \
+                         Use PatternSet::scan() for CPU-only scanning."
+                    ),
+                });
             }
         }
-
-        #[cfg(not(feature = "gpu"))]
-        return self.patterns.scan(data);
     }
 
     /// Scan `data` using the GPU backend.
@@ -87,15 +69,7 @@ impl GpuScanner {
     /// True when GPU initialization succeeded and scans will dispatch to wgpu.
     #[must_use]
     pub fn uses_gpu(&self) -> bool {
-        #[cfg(feature = "gpu")]
-        {
-            matches!(self.backend.as_ref(), Backend::Gpu(_))
-        }
-
-        #[cfg(not(feature = "gpu"))]
-        {
-            false
-        }
+        matches!(self.backend.as_ref(), Backend::Gpu(_))
     }
 
     /// Scan using GPU if available, otherwise fall back to CPU.
@@ -119,17 +93,9 @@ impl GpuScanner {
     #[must_use]
     #[allow(clippy::needless_return)]
     pub fn fallback_reason(&self) -> Option<&str> {
-        #[cfg(feature = "gpu")]
-        {
-            return match self.backend.as_ref() {
-                Backend::Gpu(_) => None,
-                Backend::InitializationFailed { reason } => Some(reason.as_str()),
-            };
-        }
-
-        #[cfg(not(feature = "gpu"))]
-        {
-            Some("gpu feature disabled at compile time. Fix: enable the `gpu` feature to dispatch through wgpu.")
+        match self.backend.as_ref() {
+            Backend::Gpu(_) => None,
+            Backend::InitializationFailed { reason } => Some(reason.as_str()),
         }
     }
     /// Returns a reference to the underlying wgpu device and queue if GPU
@@ -138,7 +104,6 @@ impl GpuScanner {
     /// This allows crates that need the same GPU device (e.g., `gputokenize`
     /// for token-aware filtering) to share it without creating a new device.
     #[must_use]
-    #[cfg(feature = "gpu")]
     pub fn gpu_device_queue(&self) -> Option<(wgpu::Device, wgpu::Queue)> {
         match self.backend.as_ref() {
             Backend::Gpu(gpu) => Some(gpu.gpu_device_queue()),
@@ -153,7 +118,6 @@ impl ByteScanner for GpuScanner {
     }
 }
 
-#[cfg(feature = "gpu")]
 fn create_gpu_backend(patterns: &PatternSet) -> Result<GpuMatcher> {
     let patterns = patterns.clone();
     std::thread::spawn(move || {
@@ -174,7 +138,6 @@ fn create_gpu_backend(patterns: &PatternSet) -> Result<GpuMatcher> {
     })?
 }
 
-#[cfg(feature = "gpu")]
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     if let Some(message) = payload.downcast_ref::<&'static str>() {
         return (*message).to_string();

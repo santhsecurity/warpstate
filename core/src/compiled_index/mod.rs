@@ -16,6 +16,7 @@ pub mod query;
 
 pub(crate) const MAGIC: [u8; 8] = *b"WPSIDX01";
 pub(crate) const VERSION: u32 = 3;
+const MAX_COMPILED_INDEX_BYTES: u64 = 512 * 1024 * 1024;
 
 /// A serialized on-disk pattern index that can be loaded without recompiling
 /// the original pattern set.
@@ -24,6 +25,7 @@ pub struct CompiledPatternIndex {
     serialized: Vec<u8>,
     names: Vec<Option<String>>,
     layout: IndexLayout,
+    literal_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +72,18 @@ impl CompiledPatternIndex {
 
     /// Load a compiled index from a file.
     pub fn load_from_file(path: &Path) -> Result<Self> {
+        let metadata = fs::metadata(path).map_err(|error| Error::PatternCompilationFailed {
+            reason: format!(
+                "failed to stat compiled index from {}: {error}. Fix: verify the file exists and is readable.",
+                path.display()
+            ),
+        })?;
+        if metadata.len() > MAX_COMPILED_INDEX_BYTES {
+            return Err(Error::InputTooLarge {
+                bytes: metadata.len() as usize,
+                max_bytes: MAX_COMPILED_INDEX_BYTES as usize,
+            });
+        }
         let bytes = fs::read(path).map_err(|error| Error::PatternCompilationFailed {
             reason: format!(
                 "failed to read compiled index from {}: {error}. Fix: verify the file exists and is readable.",
@@ -241,6 +255,7 @@ impl CompiledPatternIndex {
         Ok(Self {
             serialized,
             names,
+            literal_count,
             layout: IndexLayout {
                 case_insensitive,
                 hash_window_len,
@@ -359,10 +374,7 @@ impl CompiledPatternIndex {
 
     /// Return the number of literal patterns in the index.
     pub fn literal_count(&self) -> usize {
-        Cursor::new(&self.serialized[self.layout.offsets_range.clone()])
-            .read_u32_pairs()
-            .map(|offsets| offsets.len())
-            .unwrap_or(0)
+        self.literal_count
     }
 
     /// Parse the literal pattern metadata from the index.
@@ -478,6 +490,7 @@ impl<'a> Cursor<'a> {
 
     pub(crate) fn read_u32_vec(&mut self) -> Result<Vec<u32>> {
         let len = u32_to_usize(self.read_u32()?, "u32 vector length")?;
+        self.ensure_count_fits(len, 4, "u32 vector")?;
         let mut values = Vec::with_capacity(len);
         for _ in 0..len {
             values.push(self.read_u32()?);
@@ -487,6 +500,7 @@ impl<'a> Cursor<'a> {
 
     pub(crate) fn read_u32_pairs(&mut self) -> Result<Vec<(u32, u32)>> {
         let len = u32_to_usize(self.read_u32()?, "pair vector length")?;
+        self.ensure_count_fits(len, 8, "pair vector")?;
         let mut values = Vec::with_capacity(len);
         for _ in 0..len {
             values.push((self.read_u32()?, self.read_u32()?));
@@ -515,6 +529,7 @@ impl<'a> Cursor<'a> {
 
     pub(crate) fn read_names(&mut self) -> Result<Vec<Option<String>>> {
         let len = u32_to_usize(self.read_u32()?, "name count")?;
+        self.ensure_count_fits(len, 4, "name table")?;
         let mut names = Vec::with_capacity(len);
         for _ in 0..len {
             let name_len = self.read_u32()?;
@@ -540,6 +555,7 @@ impl<'a> Cursor<'a> {
         pattern_count: usize,
     ) -> Result<Vec<(usize, String)>> {
         let len = u32_to_usize(self.read_u32()?, "regex pattern count")?;
+        self.ensure_count_fits(len, 8, "regex pattern table")?;
         let mut regex_patterns = Vec::with_capacity(len);
         let mut seen = HashSet::new();
 
@@ -573,6 +589,7 @@ impl<'a> Cursor<'a> {
 
     pub(crate) fn read_prefilter_table(&mut self) -> Result<LiteralPrefilterTable> {
         let prefix_meta_len = u32_to_usize(self.read_u32()?, "prefix meta length")?;
+        self.ensure_count_fits(prefix_meta_len, 16, "prefix meta table")?;
         let mut prefix_meta = Vec::with_capacity(prefix_meta_len);
         for _ in 0..prefix_meta_len {
             prefix_meta.push([
@@ -584,16 +601,20 @@ impl<'a> Cursor<'a> {
         }
 
         let bucket_ranges_len = u32_to_usize(self.read_u32()?, "bucket range length")?;
+        self.ensure_count_fits(bucket_ranges_len, 8, "bucket range table")?;
         let mut bucket_ranges = Vec::with_capacity(bucket_ranges_len);
         for _ in 0..bucket_ranges_len {
             bucket_ranges.push([self.read_u32()?, self.read_u32()?]);
         }
 
         let entries_len = u32_to_usize(self.read_u32()?, "entry length")?;
+        self.ensure_count_fits(entries_len, 8, "prefilter entry table")?;
         let mut entries = Vec::with_capacity(entries_len);
         for _ in 0..entries_len {
             entries.push([self.read_u32()?, self.read_u32()?]);
         }
+
+        validate_prefilter_ranges(&bucket_ranges, entries.len())?;
 
         Ok(LiteralPrefilterTable {
             prefix_meta,
@@ -606,6 +627,7 @@ impl<'a> Cursor<'a> {
         let start = self.offset;
 
         let prefix_meta_len = u32_to_usize(self.read_u32()?, "prefix meta length")?;
+        self.ensure_count_fits(prefix_meta_len, 16, "prefix meta table")?;
         for _ in 0..prefix_meta_len {
             let _ = self.read_u32()?;
             let _ = self.read_u32()?;
@@ -614,12 +636,14 @@ impl<'a> Cursor<'a> {
         }
 
         let bucket_ranges_len = u32_to_usize(self.read_u32()?, "bucket range length")?;
+        self.ensure_count_fits(bucket_ranges_len, 8, "bucket range table")?;
         for _ in 0..bucket_ranges_len {
             let _ = self.read_u32()?;
             let _ = self.read_u32()?;
         }
 
         let entries_len = u32_to_usize(self.read_u32()?, "entry length")?;
+        self.ensure_count_fits(entries_len, 8, "prefilter entry table")?;
         for _ in 0..entries_len {
             let _ = self.read_u32()?;
             let _ = self.read_u32()?;
@@ -639,6 +663,48 @@ impl<'a> Cursor<'a> {
     pub(crate) fn remaining(&self) -> usize {
         self.data.len() - self.offset
     }
+
+    fn ensure_count_fits(&self, count: usize, element_size: usize, label: &str) -> Result<()> {
+        let needed =
+            count
+                .checked_mul(element_size)
+                .ok_or_else(|| Error::PatternCompilationFailed {
+                    reason: format!(
+                        "compiled index {label} length overflows usize. Fix: rebuild the index."
+                    ),
+                })?;
+        if needed > self.remaining() {
+            return Err(Error::PatternCompilationFailed {
+                reason: format!(
+                    "compiled index {label} declares {needed} bytes but only {} bytes remain. Fix: rebuild the index.",
+                    self.remaining()
+                ),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn validate_prefilter_ranges(bucket_ranges: &[[u32; 2]], entries_len: usize) -> Result<()> {
+    for (index, &[start, len]) in bucket_ranges.iter().enumerate() {
+        let start = u32_to_usize(start, "prefilter bucket range start")?;
+        let len = u32_to_usize(len, "prefilter bucket range length")?;
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| Error::PatternCompilationFailed {
+                reason: format!(
+                "compiled index prefilter bucket range #{index} overflows. Fix: rebuild the index."
+            ),
+            })?;
+        if end > entries_len {
+            return Err(Error::PatternCompilationFailed {
+                reason: format!(
+                    "compiled index prefilter bucket range #{index} points outside the entry table. Fix: rebuild the index."
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

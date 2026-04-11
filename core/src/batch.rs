@@ -65,6 +65,12 @@ pub struct CoalesceMap {
 pub fn coalesce(items: &[ScanItem<'_>]) -> crate::error::Result<CoalesceMap> {
     let mut total_size: usize = 0;
     for item in items {
+        if item.data.len() > u32::MAX as usize {
+            return Err(crate::error::Error::InputTooLarge {
+                bytes: item.data.len(),
+                max_bytes: u32::MAX as usize,
+            });
+        }
         total_size =
             total_size
                 .checked_add(item.data.len())
@@ -134,7 +140,6 @@ pub fn decoalesce(map: &CoalesceMap, global_matches: Vec<Match>) -> Vec<TaggedMa
 
         let local_start = global_start - item_offset;
         let local_end = global_end - item_offset;
-        // Skip matches that can't fit in u32 (items >4GB).
         let Ok(start) = u32::try_from(local_start) else {
             continue;
         };
@@ -147,7 +152,6 @@ pub fn decoalesce(map: &CoalesceMap, global_matches: Vec<Match>) -> Vec<TaggedMa
                 pattern_id: m.pattern_id,
                 start,
                 end,
-                padding: 0,
             },
         });
     }
@@ -434,7 +438,6 @@ mod tests {
             pattern_id: 0,
             start: 2,
             end: 5, // spans item 0 (0..3) into item 1 (3..6)
-            padding: 0,
         };
 
         let tagged = decoalesce(&map, vec![cross_boundary]);
@@ -478,7 +481,6 @@ mod tests {
                         pattern_id: 7,
                         start: 1,
                         end: 4,
-                        padding: 0,
                     },
                 },
                 TaggedMatch {
@@ -487,7 +489,6 @@ mod tests {
                         pattern_id: 3,
                         start: 0,
                         end: 2,
-                        padding: 0,
                     },
                 },
             ],

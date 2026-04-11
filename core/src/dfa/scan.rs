@@ -1,5 +1,7 @@
 use regex_automata::dfa::{dense, Automaton};
 use regex_automata::{Anchored, Input};
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
 use super::{RegexDFA, MASK_STATE, MAX_SCAN_MATCHES};
 use crate::error::{Error, Result};
@@ -68,7 +70,6 @@ impl RegexDFA {
                     pattern_id: pat_id,
                     start: start_u32,
                     end: end_u32,
-                    padding: 0,
                 });
             } else {
                 return Err(Error::MatchBufferOverflow { count: max, max });
@@ -86,6 +87,46 @@ impl RegexDFA {
         matches: &mut Vec<Match>,
         max: usize,
     ) -> Result<u32> {
+        if self.pattern_lengths.iter().any(|&len| len == 0) {
+            let room = max.saturating_sub(matches.len());
+            let mut emitted = 0usize;
+            self.scan_native_without_jit_with(haystack, &mut |matched| {
+                if emitted >= room {
+                    return false;
+                }
+                let Some(abs_start) = absolute_offset.checked_add(matched.start as usize) else {
+                    return false;
+                };
+                let Some(abs_end) = absolute_offset.checked_add(matched.end as usize) else {
+                    return false;
+                };
+                let Ok(start) = u32::try_from(abs_start) else {
+                    return false;
+                };
+                let Ok(end) = u32::try_from(abs_end) else {
+                    return false;
+                };
+                matches.push(Match {
+                    pattern_id: matched.pattern_id,
+                    start,
+                    end,
+                });
+                emitted += 1;
+                true
+            })?;
+            if emitted >= room && matches.len() >= max {
+                return Err(Error::MatchBufferOverflow { count: max, max });
+            }
+            let mut state = initial_state;
+            for &byte in haystack {
+                state = self.transition_for_byte(state, byte);
+                if Self::is_dead_state(state) {
+                    state = self.start_state;
+                }
+            }
+            return Ok(state);
+        }
+
         let mut state = initial_state;
         let abs_off = absolute_offset as u64;
 
@@ -99,13 +140,13 @@ impl RegexDFA {
             state = self.transition_for_byte(state, haystack[pos]);
 
             let end0 = abs_off + pos as u64 + 1;
-            if Self::is_match_state(state) {
+            if Self::is_match_state(state) && self.match_state_has_only_fixed_lengths(state)? {
                 self.collect_fixed_length_matches_at(state, end0, matches, max)?;
             }
             if Self::is_dead_state(state) {
                 state = self.start_state;
                 state = self.transition_for_byte(state, haystack[pos]);
-                if Self::is_match_state(state) {
+                if Self::is_match_state(state) && self.match_state_has_only_fixed_lengths(state)? {
                     self.collect_fixed_length_matches_at(state, end0, matches, max)?;
                 }
                 if Self::is_dead_state(state) {
@@ -118,13 +159,13 @@ impl RegexDFA {
             state = self.transition_for_byte(state, haystack[pos]);
 
             let end1 = abs_off + pos as u64 + 1;
-            if Self::is_match_state(state) {
+            if Self::is_match_state(state) && self.match_state_has_only_fixed_lengths(state)? {
                 self.collect_fixed_length_matches_at(state, end1, matches, max)?;
             }
             if Self::is_dead_state(state) {
                 state = self.start_state;
                 state = self.transition_for_byte(state, haystack[pos]);
-                if Self::is_match_state(state) {
+                if Self::is_match_state(state) && self.match_state_has_only_fixed_lengths(state)? {
                     self.collect_fixed_length_matches_at(state, end1, matches, max)?;
                 }
                 if Self::is_dead_state(state) {
@@ -134,42 +175,102 @@ impl RegexDFA {
             pos += 1;
         }
 
-        // Handle remaining byte
+        // Handle remaining byte(s) — preserving pre-reset state for EOI.
+        //
+        // When the DFA hits a dead state at the final byte, the reset to
+        // start_state would clobber the state needed for EOI-anchored
+        // patterns (e.g., `pattern$`). We save the state before reset so
+        // the EOI transition below can try both paths.
+        let mut pre_reset_state = None;
         while pos < len {
             state = self.transition_for_byte(state, haystack[pos]);
 
             let end = abs_off + pos as u64 + 1;
 
-            if Self::is_match_state(state) {
+            if Self::is_match_state(state) && self.match_state_has_only_fixed_lengths(state)? {
                 self.collect_fixed_length_matches_at(state, end, matches, max)?;
             }
 
             if Self::is_dead_state(state) {
+                // Save the dead state before reset — EOI might still match
+                // from the pre-transition state at the final byte.
+                if pos + 1 == len {
+                    pre_reset_state = Some(state);
+                }
                 state = self.start_state;
                 state = self.transition_for_byte(state, haystack[pos]);
-                if Self::is_match_state(state) {
+                if Self::is_match_state(state) && self.match_state_has_only_fixed_lengths(state)? {
                     self.collect_fixed_length_matches_at(state, end, matches, max)?;
                 }
                 if Self::is_dead_state(state) {
+                    if pos + 1 == len {
+                        pre_reset_state = Some(state);
+                    }
                     state = self.start_state;
                 }
             }
             pos += 1;
         }
 
-        // EOI transition: Check regardless of current state to catch matches
-        // for patterns anchored to end-of-input (e.g., regex ending with $).
-        // Even if we're in a "dead" state for byte transitions, the EOI class
-        // may have a valid transition to a match state.
+        // EOI transition: try both the current state and the pre-reset state
+        // to catch matches for patterns anchored to end-of-input (e.g., `$`).
         let eoi_state = self.transition_for_eoi(state);
-        if Self::is_match_state(eoi_state) {
+        if Self::is_match_state(eoi_state) && self.match_state_has_only_fixed_lengths(eoi_state)? {
             // SAFETY: haystack.len() is validated <= u32::MAX by check_input_size
             #[allow(clippy::cast_possible_truncation)]
             let eoi_end = abs_off.saturating_add(haystack.len() as u64);
             self.collect_fixed_length_matches_at(eoi_state, eoi_end, matches, max)?;
         }
 
+        // If the dead-state reset at the final byte clobbered a state that
+        // would have produced an EOI match, try the pre-reset state's EOI.
+        if let Some(pre_state) = pre_reset_state {
+            let eoi_pre = self.transition_for_eoi(pre_state);
+            if Self::is_match_state(eoi_pre)
+                && self.match_state_has_only_fixed_lengths(eoi_pre)?
+                && eoi_pre != eoi_state
+            {
+                #[allow(clippy::cast_possible_truncation)]
+                let eoi_end = abs_off.saturating_add(haystack.len() as u64);
+                self.collect_fixed_length_matches_at(eoi_pre, eoi_end, matches, max)?;
+            }
+        }
+
         Ok(state)
+    }
+
+    fn match_state_has_only_fixed_lengths(&self, state: u32) -> Result<bool> {
+        let state_idx = (state & MASK_STATE) as usize;
+        let ptr = self
+            .match_list_pointers
+            .get(state_idx)
+            .copied()
+            .ok_or_else(|| {
+                self.collect_fixed_length_matches_at_cold(
+                    "regex DFA match list pointer is out of bounds",
+                )
+            })? as usize;
+        let qty = *self.match_lists.get(ptr).ok_or_else(|| {
+            self.collect_fixed_length_matches_at_cold(
+                "regex DFA match list pointer is out of bounds",
+            )
+        })? as usize;
+        for m in 0..qty {
+            let pat_id = self.match_lists.get(ptr + 1 + m).copied().ok_or_else(|| {
+                self.collect_fixed_length_matches_at_cold(
+                    "regex DFA match list extends past the serialized table",
+                )
+            })? as usize;
+            let pat_len = self.pattern_lengths.get(pat_id).copied().ok_or_else(|| {
+                self.collect_fixed_length_matches_at_cold(
+                    "regex DFA pattern length lookup out of bounds",
+                )
+            })?;
+            if pat_len == 0 {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Single-pass O(n) DFA scan.
@@ -262,7 +363,6 @@ impl RegexDFA {
                 pattern_id: pat_id,
                 start: start_u32,
                 end: end_u32,
-                padding: 0,
             });
         }
         Ok(())
@@ -348,7 +448,6 @@ impl RegexDFA {
                         pattern_id: pat_id,
                         start,
                         end,
-                        padding: 0,
                     }) {
                         break;
                     }
@@ -419,22 +518,6 @@ impl RegexDFA {
             let mut match_pat = 0;
 
             while at < haystack.len() {
-                #[cfg(target_arch = "x86_64")]
-                unsafe {
-                    let idx = (state as usize) * compact.class_count;
-                    if let Some(trans) = &compact.trans_u8 {
-                        core::arch::x86_64::_mm_prefetch(
-                            trans.as_ptr().add(idx).cast::<i8>(),
-                            core::arch::x86_64::_MM_HINT_T0,
-                        );
-                    } else {
-                        core::arch::x86_64::_mm_prefetch(
-                            compact.trans_u32.as_ptr().add(idx).cast::<i8>(),
-                            core::arch::x86_64::_MM_HINT_T0,
-                        );
-                    }
-                }
-
                 let byte = haystack[at];
                 state = compact.next_state(state, byte);
 
@@ -468,7 +551,7 @@ impl RegexDFA {
             let match_start = if max_pat_len > 0 && end >= max_pat_len {
                 end - max_pat_len
             } else {
-                let search_start = end.saturating_sub(256).max(pos);
+                let search_start = pos;
                 let mut best = end.saturating_sub(1).max(pos);
                 for candidate in (search_start..end).rev() {
                     let mut b_state = compact.start_anchored;
@@ -515,7 +598,6 @@ impl RegexDFA {
                 pattern_id,
                 start,
                 end: end_u32,
-                padding: 0,
             }) {
                 break;
             }
@@ -558,51 +640,54 @@ impl RegexDFA {
                 }
             })
             .collect();
+        let mut heap = BinaryHeap::new();
+        for (stream_index, stream) in streams.iter().enumerate() {
+            if let Some(next) = &stream.next {
+                heap.push(Reverse((
+                    next.start(),
+                    stream.pattern_id,
+                    next.end(),
+                    stream_index,
+                )));
+            }
+        }
 
         let mut count = 0usize;
-        loop {
-            // Find minimum start position across all streams.
-            let mut min_start = usize::MAX;
-            for s in &streams {
-                if let Some(m) = &s.next {
-                    min_start = min_start.min(m.start());
-                }
+        while let Some(Reverse((start_usize, _pattern_key, end_usize, stream_index))) = heap.pop() {
+            let s = &mut streams[stream_index];
+            let Some(m) = s.next.take() else { continue };
+            if m.start() != start_usize || m.end() != end_usize {
+                continue;
             }
-            if min_start == usize::MAX {
-                break;
+            if count >= MAX_SCAN_MATCHES {
+                return Err(Error::MatchBufferOverflow {
+                    count: MAX_SCAN_MATCHES,
+                    max: MAX_SCAN_MATCHES,
+                });
             }
-
-            // Emit ALL matches at min_start (sorted by pattern_id naturally
-            // since streams are in pattern order).
-            for s in &mut streams {
-                let Some(m) = &s.next else { continue };
-                if m.start() != min_start {
-                    continue;
-                }
-                if count >= MAX_SCAN_MATCHES {
-                    return Err(Error::MatchBufferOverflow {
-                        count: MAX_SCAN_MATCHES,
-                        max: MAX_SCAN_MATCHES,
-                    });
-                }
-                // SAFETY: match indices are bounded by haystack.len() <= u32::MAX
-                #[allow(clippy::cast_possible_truncation)]
-                let start = m.start() as u32;
-                #[allow(clippy::cast_possible_truncation)]
-                let end = m.end() as u32;
-                let mat = Match {
-                    pattern_id: s.pattern_id,
-                    start,
-                    end,
-                    padding: 0,
-                };
-                // Advance this stream past the current match.
-                s.next = s.iter.next();
-                if !visitor(mat) {
-                    return Ok(());
-                }
-                count += 1;
+            // SAFETY: match indices are bounded by haystack.len() <= u32::MAX
+            #[allow(clippy::cast_possible_truncation)]
+            let start = start_usize as u32;
+            #[allow(clippy::cast_possible_truncation)]
+            let end = end_usize as u32;
+            let mat = Match {
+                pattern_id: s.pattern_id,
+                start,
+                end,
+            };
+            s.next = s.iter.next();
+            if let Some(next) = &s.next {
+                heap.push(Reverse((
+                    next.start(),
+                    s.pattern_id,
+                    next.end(),
+                    stream_index,
+                )));
             }
+            if !visitor(mat) {
+                return Ok(());
+            }
+            count += 1;
         }
         Ok(())
     }
@@ -649,7 +734,7 @@ impl RegexDFA {
             let match_start = if max_pat_len > 0 && match_end >= max_pat_len {
                 match_end - max_pat_len
             } else {
-                let search_start = match_end.saturating_sub(256).max(pos);
+                let search_start = pos;
                 let mut best = match_end.saturating_sub(1).max(pos);
                 for candidate in (search_start..match_end).rev() {
                     let input_a = Input::new(haystack)
@@ -682,7 +767,6 @@ impl RegexDFA {
                 pattern_id,
                 start,
                 end,
-                padding: 0,
             }) {
                 break;
             }

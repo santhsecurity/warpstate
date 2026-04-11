@@ -205,7 +205,7 @@ fn test_18_concurrent_hot_swap() {
     });
 
     let p2 = PatternSet::builder().literal("v2").build().unwrap();
-    let _ = hot.swap(p2);
+    let _old = hot.swap(p2);
     t1.join().unwrap();
 }
 

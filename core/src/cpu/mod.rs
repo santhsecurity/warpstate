@@ -268,7 +268,6 @@ mod tests {
                     pattern_id,
                     start: pos as u32,
                     end: pos as u32 + needle_len,
-                    padding: 0,
                 };
                 count += 1;
             }
@@ -302,7 +301,6 @@ mod tests {
                 pattern_id,
                 start: mat.start() as u32,
                 end: mat.end() as u32,
-                padding: 0,
             };
             count += 1;
         }

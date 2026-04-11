@@ -20,10 +20,7 @@ impl GpuBufferPool {
         size: u64,
         usage: wgpu::BufferUsages,
     ) -> wgpu::Buffer {
-        let size_class = size
-            .checked_next_power_of_two()
-            .unwrap_or(size)
-            .max(64);
+        let size_class = size.checked_next_power_of_two().unwrap_or(size).max(64);
 
         {
             let mut pool = match self.available.lock() {
@@ -50,23 +47,36 @@ impl GpuBufferPool {
     /// Return a buffer to the pool for future reuse.
     pub fn return_buffer(&self, buffer: wgpu::Buffer, usage: wgpu::BufferUsages) {
         const MAX_POOL_SIZE: usize = 64;
+        const MAX_POOL_BYTES: u64 = 512 * 1024 * 1024;
 
         let size = buffer.size();
+        if size > MAX_POOL_BYTES {
+            buffer.destroy();
+            return;
+        }
         let mut pool = match self.available.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
 
-        if pool.len() >= MAX_POOL_SIZE {
-            // Evict the smallest buffer to keep large allocations hot.
-            // At petabyte scale, large buffers are expensive to recreate.
-            if let Some(min_idx) = pool
+        while pool.len() >= MAX_POOL_SIZE
+            || pool
+                .iter()
+                .map(|(_, s, _)| *s)
+                .sum::<u64>()
+                .saturating_add(size)
+                > MAX_POOL_BYTES
+        {
+            if let Some(max_idx) = pool
                 .iter()
                 .enumerate()
-                .min_by_key(|(_, (_, s, _))| *s)
+                .max_by_key(|(_, (_, s, _))| *s)
                 .map(|(i, _)| i)
             {
-                pool.swap_remove(min_idx);
+                let (_, _, evicted) = pool.swap_remove(max_idx);
+                evicted.destroy();
+            } else {
+                break;
             }
         }
         pool.push((usage, size, buffer));

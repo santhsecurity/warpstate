@@ -1,7 +1,5 @@
 //! Regex DFA compilation and execution.
-#![allow(unsafe_code)]
 
-use std::mem;
 #[cfg(feature = "jit")]
 use std::sync::Arc;
 
@@ -54,13 +52,7 @@ pub struct CompactDfa {
 impl CompactDfa {
     #[inline(always)]
     fn flag_byte(&self, state: u32) -> u8 {
-        debug_assert!(
-            (state as usize) < self.flags.len(),
-            "DFA state {state} out of bounds (max {})",
-            self.flags.len()
-        );
-        // SAFETY: bounds validation and unchecked access stay adjacent.
-        unsafe { *self.flags.get_unchecked(state as usize) }
+        self.flags.get(state as usize).copied().unwrap_or(2)
     }
 
     #[inline(always)]
@@ -91,9 +83,7 @@ impl CompactDfa {
     #[inline(always)]
     fn transition_u4(trans: &[u8], idx: usize) -> u32 {
         let packed_idx = idx / 2;
-        debug_assert!(packed_idx < trans.len());
-        // SAFETY: bounds validation and unchecked access stay adjacent.
-        let val = unsafe { *trans.get_unchecked(packed_idx) };
+        let val = trans.get(packed_idx).copied().unwrap_or(0);
         if idx % 2 == 0 {
             (val & 0x0F) as u32
         } else {
@@ -103,16 +93,12 @@ impl CompactDfa {
 
     #[inline(always)]
     fn transition_u8(trans: &[u8], idx: usize) -> u32 {
-        debug_assert!(idx < trans.len());
-        // SAFETY: bounds validation and unchecked access stay adjacent.
-        unsafe { *trans.get_unchecked(idx) as u32 }
+        trans.get(idx).copied().unwrap_or(0) as u32
     }
 
     #[inline(always)]
     fn transition_u32(trans: &[u32], idx: usize) -> u32 {
-        debug_assert!(idx < trans.len());
-        // SAFETY: bounds validation and unchecked access stay adjacent.
-        unsafe { *trans.get_unchecked(idx) }
+        trans.get(idx).copied().unwrap_or(0)
     }
 
     #[inline(always)]
@@ -195,10 +181,8 @@ pub(crate) enum TransitionTableBacking {
 
 impl Clone for RegexDFA {
     fn clone(&self) -> Self {
-        let mut transition_table = alloc_huge_page_vec_with_backing(self.transition_table.len());
-        transition_table.0.extend_from_slice(&self.transition_table);
         Self {
-            transition_table: transition_table.0,
+            transition_table: self.transition_table.clone(),
             match_list_pointers: self.match_list_pointers.clone(),
             match_lists: self.match_lists.clone(),
             pattern_lengths: self.pattern_lengths.clone(),
@@ -209,7 +193,7 @@ impl Clone for RegexDFA {
             native_dfa: self.native_dfa.clone(),
             native_dfa_bytes: self.native_dfa_bytes.clone(),
             native_original_ids: self.native_original_ids.clone(),
-            transition_table_backing: transition_table.1,
+            transition_table_backing: self.transition_table_backing,
             fast_regex: self.fast_regex.clone(),
             fast_regexes: self.fast_regexes.clone(),
             compact_dfa: self.compact_dfa.clone(),
@@ -219,40 +203,15 @@ impl Clone for RegexDFA {
     }
 }
 
-impl Drop for RegexDFA {
-    fn drop(&mut self) {
-        #[cfg(target_os = "linux")]
-        if let TransitionTableBacking::HugePages { byte_len } = self.transition_table_backing {
-            let table = mem::take(&mut self.transition_table);
-            if table.capacity() != 0 {
-                // SAFETY: `alloc_huge_page_vec_with_backing` created this buffer via `mmap`
-                // with `byte_len` bytes and transferred ownership to this `RegexDFA`.
-                // We replace the field with an empty `Vec` before `drop` continues, so the
-                // original buffer is never passed to the global allocator.
-                unsafe {
-                    let ptr = table.as_ptr().cast::<libc::c_void>().cast_mut();
-                    mem::forget(table);
-                    let _ = libc::munmap(ptr, byte_len);
-                }
-            }
-        }
-    }
-}
-
 impl RegexDFA {
     #[inline(always)]
     fn byte_class(&self, byte: u8) -> usize {
-        let idx = usize::from(byte);
-        debug_assert!(idx < self.byte_classes.len());
-        // SAFETY: `byte` is always 0..=255 and validation is adjacent.
-        unsafe { *self.byte_classes.get_unchecked(idx) as usize }
+        self.byte_classes[usize::from(byte)] as usize
     }
 
     #[inline(always)]
     fn transition_table_entry(&self, idx: usize) -> u32 {
-        debug_assert!(idx < self.transition_table.len());
-        // SAFETY: bounds validation and unchecked access stay adjacent.
-        unsafe { *self.transition_table.get_unchecked(idx) }
+        self.transition_table.get(idx).copied().unwrap_or(FLAG_DEAD)
     }
 
     #[inline]
@@ -321,7 +280,7 @@ impl RegexDFA {
                 ),
             });
         }
-        let _ = dense::DFA::from_bytes(&native_dfa_bytes).map_err(|error| {
+        let (native_dfa, _) = dense::DFA::from_bytes(&native_dfa_bytes).map_err(|error| {
             Error::PatternCompilationFailed {
                 reason: format!("serialized regex DFA is invalid: {error}"),
             }
@@ -348,7 +307,7 @@ impl RegexDFA {
             class_count,
             eoi_class,
             byte_classes,
-            native_dfa: None,
+            native_dfa: Some(native_dfa.to_owned()),
             native_dfa_bytes,
             native_original_ids,
             transition_table_backing: TransitionTableBacking::Standard,
@@ -422,39 +381,6 @@ impl RegexDFA {
 pub(crate) fn alloc_huge_page_vec_with_backing<T>(
     count: usize,
 ) -> (Vec<T>, TransitionTableBacking) {
-    #[cfg(target_os = "linux")]
-    {
-        if mem::size_of::<T>() == 0 || count == 0 || mem::needs_drop::<T>() {
-            return (Vec::with_capacity(count), TransitionTableBacking::Standard);
-        }
-
-        let Some(byte_len) = count.checked_mul(mem::size_of::<T>()) else {
-            return (Vec::with_capacity(count), TransitionTableBacking::Standard);
-        };
-
-        // `MAP_HUGETLB` may fail when the kernel has no reserved huge pages.
-        // In that case we fall back to the normal allocator so regex builds remain reliable.
-        let ptr = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                byte_len,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_HUGETLB,
-                -1,
-                0,
-            )
-        };
-
-        if ptr != libc::MAP_FAILED {
-            // SAFETY: `mmap` returned a unique writable region of `byte_len` bytes,
-            // which is enough space for `count` contiguous `T` values.
-            let vec = unsafe { Vec::from_raw_parts(ptr.cast::<T>(), 0, count) };
-            return (vec, TransitionTableBacking::HugePages { byte_len });
-        }
-
-        let _errno = std::io::Error::last_os_error().raw_os_error();
-    }
-
     (Vec::with_capacity(count), TransitionTableBacking::Standard)
 }
 
@@ -489,6 +415,6 @@ mod tests {
     #[test]
     fn match_struct_is_compact() {
         assert_eq!(align_of::<crate::Match>(), 4); // u32 alignment
-        assert_eq!(size_of::<crate::Match>(), 16); // 4 × u32
+        assert_eq!(size_of::<crate::Match>(), 12); // 3 × u32
     }
 }

@@ -1135,7 +1135,7 @@ fn hotswap_finds_matches_after_swap() {
     assert_eq!(count1, 1, "CRITICAL: Initial pattern not found");
 
     // Swap and verify new pattern works
-    hotswap.swap(ps2);
+    let _old = hotswap.swap(ps2);
     let count2 = hotswap.scan(b"new_pattern", &mut buf).unwrap();
     assert_eq!(count2, 1, "CRITICAL: Pattern not found after swap");
 }

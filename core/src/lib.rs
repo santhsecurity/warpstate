@@ -1,4 +1,5 @@
 #![warn(missing_docs)]
+#![forbid(unsafe_code)]
 //! # warpstate — GPU-accelerated multi-pattern matching
 //!
 //! Run thousands of literal patterns against large data using GPU compute
@@ -71,7 +72,6 @@
 //! The IR compiles once and is consumed by any backend. Adding a new backend
 //! means implementing one function that takes `&PatternIR` and `&[u8]`.
 
-#![cfg_attr(not(feature = "gpu"), deny(unsafe_code))]
 #![cfg_attr(
     not(test),
     deny(
@@ -87,9 +87,6 @@
     clippy::must_use_candidate,
     clippy::return_self_not_must_use,
     clippy::unnecessary_literal_bound,
-    clippy::doc_markdown,
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
     clippy::unnecessary_wraps,
     clippy::needless_raw_string_hashes,
     clippy::unused_async,
@@ -121,51 +118,34 @@ pub(crate) mod error;
 pub(crate) mod fused;
 #[cfg(feature = "gpu")]
 pub mod gpu;
-pub(crate) mod gpu_scanner;
 pub(crate) mod hash_scan;
 mod literal_prefilter;
 pub(crate) mod pattern;
+pub(crate) mod regex_engine;
 pub(crate) mod router;
 pub(crate) mod scanner;
-#[cfg(feature = "gpu")]
-pub(crate) mod shader;
 pub(crate) mod specialize;
 
-// Production modules wired in
-#[cfg(feature = "gpu")]
-pub(crate) mod algebraic;
 #[cfg(feature = "gpu")]
 pub(crate) mod dma;
-/// DFA traversal on the GPU (deprecated — use persistent, smem, or algebraic).
-#[cfg(feature = "gpu")]
-#[allow(deprecated)]
-pub(crate) mod gpu_dfa;
-#[cfg(feature = "gpu")]
-pub mod gpu_smem;
 /// Trait definition for pattern matching backends.
 pub(crate) mod matcher;
 #[cfg(feature = "gpu")]
 pub(crate) mod multi_gpu;
-#[cfg(feature = "gpu")]
-pub(crate) mod persistent;
 pub(crate) mod pipeline;
-#[cfg(feature = "gpu")]
-pub(crate) mod rolling_hash;
-#[cfg(feature = "gpu")]
-pub(crate) mod shader_hash;
-#[cfg(feature = "gpu")]
-pub(crate) mod shader_smem;
 pub(crate) mod stream;
 
 pub use compiled_index::CompiledPatternIndex;
 pub use config::{AutoMatcherConfig, DEFAULT_GPU_THRESHOLD, DEFAULT_MAX_MATCHES};
 pub use cpu::{scan, scan_aho_corasick, scan_count, scan_with, CachedScanner};
+pub use dfa::RegexDFA;
 pub use error::{Error, Result};
 #[cfg(feature = "fused")]
 pub use fused::FusedScanner;
 #[cfg(feature = "gpu")]
 pub use gpu::GpuMatcher;
-pub use gpu_scanner::GpuScanner;
+#[cfg(feature = "gpu")]
+pub use gpu::GpuScanner;
 pub use hash_scan::HashScanner;
 pub use pattern::{HotSwapPatternSet, PatternIR, PatternSet, PatternSetBuilder};
 pub use router::AutoMatcher;
@@ -180,8 +160,6 @@ pub use matchkit::{GpuMatch, Match};
 // Exports from newly wired modules
 #[cfg(feature = "gpu")]
 pub use multi_gpu::MultiGpuMatcher;
-#[cfg(feature = "gpu")]
-pub use persistent::PersistentMatcher;
 pub use pipeline::StreamPipeline;
 pub use stream::StreamScanner;
 

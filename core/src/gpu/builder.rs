@@ -1,11 +1,11 @@
 use wgpu::util::DeviceExt;
 
 use crate::error::{Error, Result};
-use crate::gpu::ensemble::{EnsembleRegexMatcher, SmallDfa};
 use crate::gpu::device::{storage_entry, uniform_entry};
-use crate::gpu::dispatch::{LiteralGpu, RegexGpu, SpecializedRegexGpu};
+use crate::gpu::dispatch::{LiteralGpu, RegexGpu};
+use crate::gpu::ensemble::{EnsembleRegexMatcher, SmallDfa};
+use crate::gpu::shader;
 use crate::pattern::{CompiledPatternKind, PatternSet};
-use crate::shader;
 
 pub(crate) fn build_literal_gpu(
     device: &wgpu::Device,
@@ -32,13 +32,17 @@ pub(crate) fn build_literal_gpu(
         })
         .collect();
 
-    let pattern_count = patterns.ir().offsets.len().try_into().map_err(|_| {
-        Error::PatternSetTooLarge {
-            patterns: patterns.len(),
-            bytes: patterns.ir().packed_bytes.len(),
-            max_bytes: u32::MAX as usize,
-        }
-    })?;
+    let pattern_count =
+        patterns
+            .ir()
+            .offsets
+            .len()
+            .try_into()
+            .map_err(|_| Error::PatternSetTooLarge {
+                patterns: patterns.len(),
+                bytes: patterns.ir().packed_bytes.len(),
+                max_bytes: u32::MAX as usize,
+            })?;
 
     let pattern_bytes_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("warpstate literal pattern bytes"),
@@ -149,16 +153,6 @@ pub(crate) fn build_regex_gpu(
         matcher: EnsembleRegexMatcher::new(device.clone(), queue.clone()),
         small_dfas,
     }))
-}
-
-/// Build a specialized regex GPU pipeline with DFA transitions as WGSL constants.
-/// Returns `None` if the DFA is too large for constant embedding or if no regex patterns exist.
-pub(crate) fn build_specialized_regex_gpu(
-    _device: &wgpu::Device,
-    patterns: &PatternSet,
-) -> Result<Option<SpecializedRegexGpu>> {
-    let _ = patterns;
-    Ok(None)
 }
 
 pub(crate) fn build_pipeline(

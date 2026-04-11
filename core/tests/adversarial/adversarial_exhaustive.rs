@@ -1113,9 +1113,7 @@ fn router_small_input_routes_to_cpu() {
         .expect("Pattern should compile");
     let matcher = block_on(AutoMatcher::with_config(
         &ps,
-        AutoMatcherConfig::new()
-            .gpu_threshold(64 * 1024)
-            .auto_tune_threshold(false),
+        AutoMatcherConfig::new().gpu_threshold(64 * 1024),
     ))
     .expect("AutoMatcher should initialize");
 
@@ -1142,9 +1140,7 @@ fn router_large_input_routes_to_gpu_or_cpu_fallback() {
         .expect("Pattern should compile");
     let matcher = block_on(AutoMatcher::with_config(
         &ps,
-        AutoMatcherConfig::new()
-            .gpu_threshold(1024)
-            .auto_tune_threshold(false),
+        AutoMatcherConfig::new().gpu_threshold(1024),
     ))
     .expect("AutoMatcher should initialize");
 
@@ -1219,9 +1215,7 @@ fn router_threshold_zero_routes_all_gpu() {
         .expect("Pattern should compile");
     let matcher = block_on(AutoMatcher::with_config(
         &ps,
-        AutoMatcherConfig::new()
-            .gpu_threshold(0)
-            .auto_tune_threshold(false),
+        AutoMatcherConfig::new().gpu_threshold(0),
     ))
     .expect("AutoMatcher should initialize");
 
@@ -1243,9 +1237,7 @@ fn router_threshold_huge_routes_all_cpu() {
         .expect("Pattern should compile");
     let matcher = block_on(AutoMatcher::with_config(
         &ps,
-        AutoMatcherConfig::new()
-            .gpu_threshold(usize::MAX)
-            .auto_tune_threshold(false),
+        AutoMatcherConfig::new().gpu_threshold(usize::MAX),
     ))
     .expect("AutoMatcher should initialize");
 
@@ -1308,8 +1300,7 @@ fn router_input_too_large_for_gpu_fallback_cpu() {
         &ps,
         AutoMatcherConfig::new()
             .gpu_threshold(0)
-            .gpu_max_input_size(1024)
-            .auto_tune_threshold(false),
+            .gpu_max_input_size(1024),
     ))
     .expect("AutoMatcher should initialize");
 
@@ -1335,9 +1326,7 @@ fn router_parity_cpu_vs_auto_for_all_sizes() {
         .expect("Pattern should compile");
     let matcher = block_on(AutoMatcher::with_config(
         &ps,
-        AutoMatcherConfig::new()
-            .gpu_threshold(512)
-            .auto_tune_threshold(false),
+        AutoMatcherConfig::new().gpu_threshold(512),
     ))
     .expect("AutoMatcher should initialize");
 

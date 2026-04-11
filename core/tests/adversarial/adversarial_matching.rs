@@ -1,4 +1,4 @@
-use warpstate::{PatternSet, Match};
+use warpstate::PatternSet;
 
 // TESTS 1-5: Overlapping literal patterns (aa, aaa, aaaa in 'aaaaa')
 
@@ -66,10 +66,10 @@ fn test_05_overlap_identical_patterns() {
     // scan_overlapping includes both Aho-Corasick matches and RegexDFA native matches.
     // However, overlapping regex is fundamentally tricky. We just test what `scan_overlapping` produces.
     let matches = ps.scan_overlapping(data).unwrap();
-    
+
     // literal 'aa' matches 0..2 and 1..3
-    // regex 'aa' (which might be extracted to literal or run in DFA) 
-    assert!(matches.len() >= 2); 
+    // regex 'aa' (which might be extracted to literal or run in DFA)
+    assert!(matches.len() >= 2);
 }
 
 // TESTS 6-10: Regex patterns with alternation and repetition at input boundaries
@@ -102,7 +102,7 @@ fn test_08_regex_repetition_exact_boundary() {
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].start, 0);
     assert_eq!(matches[0].end, 5);
-    
+
     let no_match = b"baaaaa";
     assert_eq!(ps.scan(no_match).unwrap().len(), 0);
 }
@@ -126,7 +126,6 @@ fn test_10_regex_repetition_trailing() {
     assert_eq!(matches[0].start, 1);
     assert_eq!(matches[0].end, 5);
 }
-
 
 // TESTS 11-15: Binary patterns with null bytes, 0xFF bytes, mixed
 
@@ -199,7 +198,10 @@ fn test_15_binary_overlapping_nulls() {
 
 #[test]
 fn test_16_pattern_longer_than_input_literal() {
-    let ps = PatternSet::builder().literal("longpattern").build().unwrap();
+    let ps = PatternSet::builder()
+        .literal("longpattern")
+        .build()
+        .unwrap();
     let data = b"short";
     let matches = ps.scan(data).unwrap();
     assert_eq!(matches.len(), 0);
@@ -245,7 +247,6 @@ fn test_20_pattern_longer_than_input_by_one_byte() {
     assert_eq!(matches.len(), 0);
 }
 
-
 // TESTS 21-25: Empty input, single byte input, exactly-pattern-length input
 
 #[test]
@@ -264,7 +265,7 @@ fn test_22_single_byte_input() {
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].start, 0);
     assert_eq!(matches[0].end, 1);
-    
+
     let no_match = b"b";
     assert_eq!(ps.scan(no_match).unwrap().len(), 0);
 }
@@ -362,13 +363,13 @@ fn test_31_max_pattern_count_all_match() {
         builder = builder.literal(&format!("PATTERN_{:04}", i));
     }
     let ps = builder.build().unwrap();
-    
+
     // Create input that contains all 1005 patterns
     let mut data = String::new();
     for i in 0..1005 {
         data.push_str(&format!("PATTERN_{:04} ", i));
     }
-    
+
     let matches = ps.scan(data.as_bytes()).unwrap();
     assert_eq!(matches.len(), 1005);
 }
@@ -380,7 +381,7 @@ fn test_32_max_pattern_count_none_match() {
         builder = builder.literal(&format!("PATTERN_{:04}", i));
     }
     let ps = builder.build().unwrap();
-    
+
     let data = b"completely unrelated text that does not match anything";
     let matches = ps.scan(data).unwrap();
     assert_eq!(matches.len(), 0);
@@ -394,14 +395,14 @@ fn test_33_max_pattern_count_mixed_regex_literal() {
         builder = builder.regex(&format!("^REG_{:04}$", i));
     }
     let ps = builder.build().unwrap();
-    
+
     // Total 1010 patterns. Match one literal and one regex.
     let data_lit = b"LIT_0250";
     let matches_lit = ps.scan(data_lit).unwrap();
     assert_eq!(matches_lit.len(), 1);
     assert_eq!(matches_lit[0].start, 0);
     assert_eq!(matches_lit[0].end, 8);
-    
+
     let data_reg = b"REG_0400";
     let matches_reg = ps.scan(data_reg).unwrap();
     assert_eq!(matches_reg.len(), 1);

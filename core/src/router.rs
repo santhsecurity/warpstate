@@ -1,4 +1,4 @@
-//! Auto-routing between CPU and GPU backends.
+//! GPU router for warpstate internet-scale scan backends.
 
 use parking_lot::Mutex;
 #[cfg(feature = "gpu")]
@@ -12,35 +12,15 @@ use crate::Match;
 use crate::PatternSet;
 
 #[cfg(feature = "gpu")]
-use crate::algebraic::AlgebraicDfaMatcher;
-#[cfg(feature = "gpu")]
 use crate::gpu::GpuMatcher;
 #[cfg(feature = "gpu")]
 use crate::gpu::SharedDeviceQueue;
-#[cfg(feature = "gpu")]
-use crate::gpu_smem::SmemDfaMatcher;
-#[cfg(feature = "gpu")]
-use crate::matcher::BlockMatcher;
-#[cfg(feature = "gpu")]
-use crate::persistent::PersistentMatcher;
 
 /// Type of GPU backend spawned for async and auto routing.
-///
-/// Tried in order of preference:
-/// 1. Algebraic (parallel DFA via prefix scan — O(log n), fastest)
-/// 2. SmemDfa (shared memory staged DFA — good for medium state counts)
-/// 3. Persistent (double-buffered standard DFA — most general)
-/// 4. Standard (single-buffer DFA — fallback)
-#[allow(clippy::large_enum_variant)]
 #[cfg(feature = "gpu")]
+#[non_exhaustive]
 pub enum GpuBackend {
-    /// Algebraic parallel DFA via prefix scan — O(log n) for small DFAs.
-    Algebraic(AlgebraicDfaMatcher),
-    /// Shared-memory staged DFA — faster than global memory.
-    Smem(SmemDfaMatcher),
-    /// The persistent, double-buffered GPU backend.
-    Persistent(PersistentMatcher),
-    /// The standard GPU backend.
+    /// The consolidated wgpu backend.
     Standard(GpuMatcher),
 }
 
@@ -48,9 +28,6 @@ pub enum GpuBackend {
 impl std::fmt::Debug for GpuBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Algebraic(_) => write!(f, "Algebraic"),
-            Self::Smem(_) => write!(f, "Smem"),
-            Self::Persistent(_) => write!(f, "Persistent"),
             Self::Standard(m) => write!(f, "Standard({m:?})"),
         }
     }
@@ -61,9 +38,6 @@ impl GpuBackend {
     /// Perform an asynchronous scan across the input data using the underlying GPU backend.
     pub async fn scan(&self, data: &[u8]) -> Result<Vec<Match>> {
         match self {
-            Self::Algebraic(m) => m.scan_block(data).await.map_err(Into::into),
-            Self::Smem(m) => m.scan_block(data).await.map_err(Into::into),
-            Self::Persistent(m) => m.scan_block(data).await.map_err(Into::into),
             Self::Standard(m) => m.scan(data).await,
         }
     }
@@ -72,9 +46,6 @@ impl GpuBackend {
 #[derive(Debug)]
 struct RouterState {
     gpu_threshold: usize,
-    tuned: bool,
-    tune_samples: usize,
-    speedup_sum: f64,
     #[cfg(feature = "gpu")]
     device_queue: Option<SharedDeviceQueue>,
     #[cfg(feature = "gpu")]
@@ -83,7 +54,7 @@ struct RouterState {
     last_gpu_init_attempt: Option<Instant>,
 }
 
-/// A matcher that automatically routes between CPU and GPU.
+/// A matcher that routes eligible input to GPU backends and fails loudly when GPU is unavailable.
 #[derive(Debug)]
 pub struct AutoMatcher {
     patterns: PatternSet,
@@ -117,9 +88,6 @@ impl AutoMatcher {
             gpu_threshold_atomic: std::sync::atomic::AtomicUsize::new(threshold),
             state: Mutex::new(RouterState {
                 gpu_threshold: threshold,
-                tuned: false,
-                tune_samples: 0,
-                speedup_sum: 0.0,
                 #[cfg(feature = "gpu")]
                 device_queue: None,
                 #[cfg(feature = "gpu")]
@@ -131,7 +99,10 @@ impl AutoMatcher {
         })
     }
 
-    /// Synchronous constructor — safe from inside or outside async runtimes.
+    /// Synchronous constructor.
+    ///
+    /// The GPU feature path drives initialization with a small, executor-independent
+    /// blocking executor. It must not be called from latency-sensitive async tasks.
     pub fn new_blocking(patterns: &PatternSet) -> Result<Self> {
         #[cfg(feature = "gpu")]
         {
@@ -144,7 +115,9 @@ impl AutoMatcher {
         }
     }
 
-    /// Synchronous constructor with config — safe from inside or outside async.
+    /// Synchronous constructor with config.
+    ///
+    /// The GPU feature path blocks the current thread until initialization finishes.
     pub fn with_config_blocking(patterns: &PatternSet, config: AutoMatcherConfig) -> Result<Self> {
         #[cfg(feature = "gpu")]
         {
@@ -168,9 +141,6 @@ impl AutoMatcher {
                 gpu_threshold_atomic: std::sync::atomic::AtomicUsize::new(threshold),
                 state: Mutex::new(RouterState {
                     gpu_threshold: threshold,
-                    tuned: false,
-                    tune_samples: 0,
-                    speedup_sum: 0.0,
                 }),
                 config,
             })
@@ -207,7 +177,7 @@ impl AutoMatcher {
         self
     }
 
-    /// Get the current GPU threshold, including auto-tuned updates.
+    /// Get the configured GPU routing threshold.
     /// Lock-free read — no mutex acquisition on the hot path.
     pub fn gpu_threshold(&self) -> usize {
         self.gpu_threshold_atomic
@@ -235,29 +205,20 @@ impl AutoMatcher {
     pub async fn scan(&self, data: &[u8]) -> Result<Vec<Match>> {
         #[cfg(not(feature = "gpu"))]
         {
-            self.patterns.scan(data)
+            let _ = data;
+            Err(crate::error::Error::NoGpuAdapter)
         }
 
         #[cfg(feature = "gpu")]
         {
             let threshold = self.gpu_threshold();
             if data.len() < threshold || data.len() > self.config.configured_gpu_max_input_size() {
-                return self.patterns.scan(data);
+                return Err(crate::error::Error::NoGpuAdapter);
             }
 
             let Some(gpu) = self.ensure_gpu_backend().await? else {
-                return self.patterns.scan(data);
+                return Err(crate::error::Error::NoGpuAdapter);
             };
-
-            if self.config.is_auto_tune_threshold_enabled() {
-                let should_tune = {
-                    let state = lock_router_state(&self.state);
-                    !state.tuned
-                };
-                if should_tune {
-                    return self.auto_tune_and_scan(gpu.as_ref(), data).await;
-                }
-            }
 
             gpu.scan(data).await
         }
@@ -265,83 +226,16 @@ impl AutoMatcher {
 
     /// Synchronous scan for callers without an async runtime.
     ///
-    /// Without GPU: directly calls the CPU scan path (no async needed).
-    /// With GPU: uses pollster outside tokio, or spawns a thread inside tokio.
+    /// Uses an executor-independent blocking poll on the current thread.
     pub fn scan_blocking(&self, input: &[u8]) -> Result<Vec<Match>> {
         #[cfg(not(feature = "gpu"))]
         {
-            // CPU-only path is fully synchronous.
-            self.patterns.scan(input)
+            let _ = input;
+            Err(crate::error::Error::NoGpuAdapter)
         }
         #[cfg(feature = "gpu")]
         {
-            // Try pollster first (works when NOT inside a tokio runtime).
-            if tokio::runtime::Handle::try_current().is_err() {
-                return pollster::block_on(self.scan(input));
-            }
-            // Inside a tokio runtime — must escape to a new thread.
-            let input = input.to_vec();
-            let this = self as *const Self as usize;
-            // SAFETY: AutoMatcher is Send+Sync and we join before returning.
-            let handle = std::thread::spawn(move || {
-                let matcher = unsafe { &*(this as *const Self) };
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|e| crate::error::Error::PatternCompilationFailed {
-                        reason: format!("scan_blocking runtime: {e}"),
-                    })?;
-                rt.block_on(matcher.scan(&input))
-            });
-            handle
-                .join()
-                .map_err(|_| crate::error::Error::PatternCompilationFailed {
-                    reason: "scan_blocking thread panicked".to_string(),
-                })?
-        }
-    }
-
-    #[cfg(feature = "gpu")]
-    async fn auto_tune_and_scan(&self, gpu: &GpuBackend, data: &[u8]) -> Result<Vec<Match>> {
-        let cpu_start = Instant::now();
-        let cpu_matches = self.patterns.scan(data)?;
-        let cpu_elapsed = cpu_start.elapsed();
-
-        let gpu_start = Instant::now();
-        let gpu_result = gpu.scan(data).await;
-        let gpu_elapsed = gpu_start.elapsed();
-
-        let mut state = lock_router_state(&self.state);
-
-        let cpu_time = cpu_elapsed.as_secs_f64();
-        let gpu_time = gpu_elapsed.as_secs_f64();
-
-        let speedup = if gpu_time > 0.0 {
-            cpu_time / gpu_time
-        } else {
-            1.0
-        };
-
-        state.tune_samples += 1;
-        state.speedup_sum += speedup;
-
-        if state.tune_samples >= 3 {
-            state.tuned = true;
-            let avg_speedup = state.speedup_sum / state.tune_samples as f64;
-            if avg_speedup >= 1.0 && gpu_result.is_ok() {
-                state.gpu_threshold = data.len().min(state.gpu_threshold);
-            } else {
-                state.gpu_threshold = data.len().saturating_add(1).max(state.gpu_threshold);
-            }
-            // Publish to atomic for lock-free reads on subsequent scan() calls.
-            self.gpu_threshold_atomic
-                .store(state.gpu_threshold, std::sync::atomic::Ordering::Relaxed);
-        }
-        drop(state);
-
-        match gpu_result {
-            Ok(gpu_matches) if gpu_elapsed <= cpu_elapsed => Ok(gpu_matches),
-            Ok(_) | Err(_) => Ok(cpu_matches),
+            pollster::block_on(self.scan(input))
         }
     }
 
@@ -398,45 +292,15 @@ impl AutoMatcher {
 
     #[cfg(feature = "gpu")]
     fn init_gpu_backend(&self, device_queue: SharedDeviceQueue) -> Option<GpuBackend> {
-        let regex_count = self.patterns.ir().regex_patterns().len();
-        if regex_count > 1 {
-            if let Ok(standard) =
-                GpuMatcher::from_device(&device_queue, &self.patterns, self.config.clone())
-            {
-                tracing::debug!("init_gpu_backend: chose GpuMatcher for multi-regex ensemble");
-                return Some(GpuBackend::Standard(standard));
+        match GpuMatcher::from_device(&device_queue, &self.patterns, self.config.clone()) {
+            Ok(standard) => {
+                tracing::debug!("init_gpu_backend: chose consolidated GpuMatcher");
+                Some(GpuBackend::Standard(standard))
             }
-            tracing::warn!("init_gpu_backend: multi-regex ensemble initialization failed");
-            return None;
-        }
-
-        if let Ok(algebraic) =
-            AlgebraicDfaMatcher::from_device(Arc::clone(&device_queue), &self.patterns)
-        {
-            tracing::debug!("init_gpu_backend: chose AlgebraicDfaMatcher");
-            Some(GpuBackend::Algebraic(algebraic))
-        } else if let Ok(smem) = SmemDfaMatcher::from_device(
-            Arc::clone(&device_queue),
-            &self.patterns,
-            self.config.clone(),
-        ) {
-            tracing::debug!("init_gpu_backend: chose SmemDfaMatcher");
-            Some(GpuBackend::Smem(smem))
-        } else if let Ok(persistent) = PersistentMatcher::from_device(
-            Arc::clone(&device_queue),
-            &self.patterns,
-            self.config.clone(),
-        ) {
-            tracing::debug!("init_gpu_backend: chose PersistentMatcher");
-            Some(GpuBackend::Persistent(persistent))
-        } else if let Ok(standard) =
-            GpuMatcher::from_device(&device_queue, &self.patterns, self.config.clone())
-        {
-            tracing::debug!("init_gpu_backend: chose GpuMatcher");
-            Some(GpuBackend::Standard(standard))
-        } else {
-            tracing::warn!("init_gpu_backend: all backend initializations failed");
-            None
+            Err(error) => {
+                tracing::warn!(?error, "init_gpu_backend: GpuMatcher initialization failed");
+                None
+            }
         }
     }
 }

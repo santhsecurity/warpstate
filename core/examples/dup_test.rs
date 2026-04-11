@@ -9,7 +9,7 @@ fn main() {
         .unwrap();
     let data = b"xxdupxx";
 
-    let scanner = HashScanner::build(patterns.ir());
+    let scanner = HashScanner::build(patterns.ir()).unwrap();
     let hash_matches = scanner.scan(data);
     let ac_matches = patterns.scan(data).unwrap();
 

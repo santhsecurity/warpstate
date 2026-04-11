@@ -14,7 +14,6 @@
 use std::sync::Arc;
 
 use warpstate::batch::{scan_batch_gpu, ScanItem};
-use warpstate::persistent::PersistentMatcher;
 use warpstate::GpuMatcher;
 use warpstate::StreamPipeline;
 use warpstate::{AutoMatcher, AutoMatcherConfig, Error, Matcher, PatternSet};
@@ -597,9 +596,7 @@ fn auto_matcher_routing_small_cpu_large_gpu() {
     let threshold = (64 * 1024).min(max_size / 8);
     let matcher = block_on(AutoMatcher::with_config(
         &patterns,
-        AutoMatcherConfig::new()
-            .gpu_threshold(threshold)
-            .auto_tune_threshold(false),
+        AutoMatcherConfig::new().gpu_threshold(threshold),
     ))
     .unwrap();
 
@@ -698,14 +695,14 @@ fn stream_pipeline_large_input_matches_single_scan() {
         patterns_to_embed.len()
     );
 
-    // StreamPipeline scan via PersistentMatcher
-    let persistent = match block_on(PersistentMatcher::new(&patterns)) {
-        Ok(pm) => pm,
+    // StreamPipeline scan via the consolidated GpuMatcher backend.
+    let gpu = match block_on(GpuMatcher::new(&patterns)) {
+        Ok(matcher) => matcher,
         Err(Error::NoGpuAdapter) => return,
-        Err(e) => panic!("Failed to create PersistentMatcher: {e:?}"),
+        Err(e) => panic!("Failed to create GpuMatcher: {e:?}"),
     };
 
-    let pipeline = StreamPipeline::new(persistent, 4096);
+    let pipeline = StreamPipeline::new(gpu, 4096);
     let pipeline_matches = block_on(pipeline.scan(&input)).unwrap();
 
     // Sort both for comparison
@@ -736,11 +733,11 @@ fn stream_pipeline_large_input_matches_single_scan() {
 }
 
 // =============================================================================
-// Test 15: Pattern with Only Regex (No Literals) — GPU DFA Path Exercised
+// Test 15: Pattern with Only Regex (No Literals) — consolidated GPU regex path
 // =============================================================================
 
 #[test]
-fn regex_only_pattern_gpu_dfa_path() {
+fn regex_only_pattern_consolidated_gpu_path() {
     if !has_gpu() {
         return;
     }

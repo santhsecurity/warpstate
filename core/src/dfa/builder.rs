@@ -8,12 +8,15 @@ use regex_syntax::hir::{Hir, HirKind};
 use super::{alloc_huge_page_vec_with_backing, RegexDFA, FLAG_DEAD, FLAG_MATCH, MAX_DFA_STATES};
 use crate::error::{Error, Result};
 
+const MAX_PUBLIC_DFA_SIZE_LIMIT: usize = 2 * 1024 * 1024 * 1024;
+
 impl RegexDFA {
     /// Build a dense Regex DFA.
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
     /// Default DFA size limit (50MB) — safe for CPU-only workloads.
     pub const DEFAULT_DFA_SIZE_LIMIT: usize = 50_000_000;
 
+    /// Build a DFA with the default size limit.
     pub fn build(pattern_strings: &[&str], original_ids: &[usize]) -> Result<Self> {
         Self::build_with_limit(pattern_strings, original_ids, Self::DEFAULT_DFA_SIZE_LIMIT)
     }
@@ -21,7 +24,12 @@ impl RegexDFA {
     /// Build with a caller-supplied DFA size limit. For GPU workloads with
     /// hundreds of regex conditions, set this to available VRAM (e.g. 2GB).
     #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
-    pub fn build_with_limit(pattern_strings: &[&str], original_ids: &[usize], dfa_size_limit: usize) -> Result<Self> {
+    pub fn build_with_limit(
+        pattern_strings: &[&str],
+        original_ids: &[usize],
+        dfa_size_limit: usize,
+    ) -> Result<Self> {
+        let dfa_size_limit = dfa_size_limit.clamp(1, MAX_PUBLIC_DFA_SIZE_LIMIT);
         // Build with anchored-only start kind. The GPU shader starts a separate
         // DFA walk at every byte position, so the start state MUST reject bytes
         // that don't match the pattern's first character (no implicit `.*` prefix).
@@ -81,9 +89,14 @@ impl RegexDFA {
                     reason: format!("failed to resolve unanchored start state: {error}"),
                 })?;
 
+        // CompactDfa is fast for any pattern count as long as match states
+        // each map to a single pattern. We build speculatively and abort if
+        // a multi-match state is encountered.
+        let allow_compact_dfa = true;
         let mut compact_states = Vec::new();
         let mut compact_state_to_idx = HashMap::<StateID, u32>::new();
         let mut compact_queue = VecDeque::new();
+        let mut compact_truncated = false;
 
         push_state(
             start_unanchored,
@@ -102,7 +115,8 @@ impl RegexDFA {
 
         while let Some(state) = compact_queue.pop_front() {
             if compact_states.len() >= MAX_DFA_STATES {
-                break; // Abandon compact optimization if states reach max
+                compact_truncated = true;
+                break;
             }
             for c in 0..class_count {
                 let next = if c == eoi_class {
@@ -111,6 +125,10 @@ impl RegexDFA {
                     compiled.next_state(state, sample_bytes[c as usize])
                 };
                 if !compact_state_to_idx.contains_key(&next) {
+                    if compact_states.len() >= MAX_DFA_STATES {
+                        compact_truncated = true;
+                        break;
+                    }
                     push_state(
                         next,
                         &mut compact_states,
@@ -119,10 +137,13 @@ impl RegexDFA {
                     )?;
                 }
             }
+            if compact_truncated {
+                break;
+            }
         }
 
         let mut compact_dfa = None;
-        if compact_states.len() <= MAX_DFA_STATES {
+        if allow_compact_dfa && !compact_truncated && compact_states.len() <= MAX_DFA_STATES {
             let mut flags = vec![0u8; compact_states.len()];
             let mut match_pattern = vec![0u32; compact_states.len()];
             let mut trans_u32 = vec![0u32; compact_states.len() * class_count as usize];
@@ -144,6 +165,14 @@ impl RegexDFA {
             for (i, &state) in compact_states.iter().enumerate() {
                 let mut f = 0;
                 if compiled.is_match_state(state) {
+                    // CompactDfa supports one pattern ID per match state.
+                    // If a match state has multiple patterns, abort and
+                    // let the full RegexDFA handle it.
+                    let m_len = compiled.match_len(state);
+                    if m_len > 1 {
+                        compact_truncated = true;
+                        break;
+                    }
                     f |= 1;
                     let pat_idx = compiled.match_pattern(state, 0).as_usize();
                     match_pattern[i] = original_ids.get(pat_idx).copied().unwrap_or(pat_idx) as u32;
@@ -164,7 +193,11 @@ impl RegexDFA {
                     };
                     let next_idx = match compact_state_to_idx.get(&next) {
                         Some(&idx) => idx,
-                        None => 0, // Dead state — treat as state 0 (start/reject)
+                        None => {
+                            return Err(Error::PatternCompilationFailed {
+                                reason: "compact DFA transition references an unmaterialized state. Fix: rebuild with a larger DFA limit or use the native DFA path.".to_string(),
+                            });
+                        }
                     };
                     let trans_idx = i * class_count as usize + c as usize;
                     trans_u32[trans_idx] = next_idx;
@@ -183,18 +216,20 @@ impl RegexDFA {
                 }
             }
 
-            compact_dfa = Some(crate::dfa::CompactDfa {
-                trans_u4,
-                trans_u8,
-                trans_u32,
-                flags,
-                match_pattern,
-                start_unanchored: compact_state_to_idx[&start_unanchored],
-                start_anchored: compact_state_to_idx[&start_state],
-                class_count: class_count as usize,
-                eoi_class: eoi_class as usize,
-                byte_classes: compact_byte_classes,
-            });
+            if !compact_truncated {
+                compact_dfa = Some(crate::dfa::CompactDfa {
+                    trans_u4,
+                    trans_u8,
+                    trans_u32,
+                    flags,
+                    match_pattern,
+                    start_unanchored: compact_state_to_idx[&start_unanchored],
+                    start_anchored: compact_state_to_idx[&start_state],
+                    class_count: class_count as usize,
+                    eoi_class: eoi_class as usize,
+                    byte_classes: compact_byte_classes,
+                });
+            }
         }
 
         let mut states = Vec::new();
@@ -313,10 +348,7 @@ impl RegexDFA {
             // Only build fast_regex for single-pattern DFAs. Multi-pattern
             // combined alternation loses pattern identity and changes priority.
             fast_regex: if pattern_strings.len() == 1 {
-                regex::bytes::RegexBuilder::new(pattern_strings[0])
-                    .multi_line(true)
-                    .build()
-                    .ok()
+                crate::regex_engine::build_byte_regex(pattern_strings[0]).ok()
             } else {
                 None
             },
@@ -328,9 +360,7 @@ impl RegexDFA {
                     .iter()
                     .zip(original_ids.iter())
                     .filter_map(|(pat, &orig_id)| {
-                        regex::bytes::RegexBuilder::new(pat)
-                            .multi_line(true)
-                            .build()
+                        crate::regex_engine::build_byte_regex(pat)
                             .ok()
                             // SAFETY: orig_id is bounded by original_ids length
                             .map(|re| (re, orig_id as u32))

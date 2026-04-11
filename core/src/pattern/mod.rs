@@ -110,11 +110,33 @@ impl PatternSet {
     /// - Mixed patterns: uses DFA evaluation
     /// - Many literals: uses Aho-Corasick
     pub fn scan(&self, data: &[u8]) -> Result<Vec<crate::Match>> {
-        let mut matches =
-            vec![crate::Match::from_parts(0, 0, 0); estimate_match_capacity(data.len())];
-        let n = self.scan_to_buffer(data, &mut matches)?;
-        matches.truncate(n);
-        Ok(matches)
+        let mut capacity = estimate_match_capacity(data.len());
+        loop {
+            let mut matches = vec![crate::Match::from_parts(0, 0, 0); capacity];
+            match self.scan_to_buffer(data, &mut matches) {
+                Ok(n) => {
+                    matches.truncate(n);
+                    return Ok(matches);
+                }
+                Err(crate::Error::MatchBufferOverflow { .. }) => {
+                    // Double the buffer and retry. If we've already hit a
+                    // reasonable ceiling, fall back to the visitor path which
+                    // has no fixed limit (but may lack overlap deduplication
+                    // for some strategies — acceptable at this scale).
+                    if capacity >= crate::cpu::MAX_CPU_MATCHES {
+                        let mut result = Vec::with_capacity(capacity);
+                        self.scan_with(data, |matched| {
+                            result.push(matched);
+                            true
+                        })?;
+                        crate::cpu::sort_matches_if_needed(&mut result);
+                        return Ok(result);
+                    }
+                    capacity = capacity.saturating_mul(2).min(crate::cpu::MAX_CPU_MATCHES);
+                }
+                Err(other) => return Err(other),
+            }
+        }
     }
 
     /// Run the optimized scan strategy using a provided match buffer.
@@ -165,11 +187,26 @@ impl PatternSet {
     /// Disables Teddy SIMD prefilters. Required for GPU backend parity
     /// testing (GPU threads inspect every byte independently).
     pub fn scan_overlapping(&self, data: &[u8]) -> Result<Vec<crate::Match>> {
-        let mut matches =
-            vec![crate::Match::from_parts(0, 0, 0); estimate_match_capacity(data.len())];
-        let n = self.scan_overlapping_to_buffer(data, &mut matches)?;
-        matches.truncate(n);
-        Ok(matches)
+        let mut capacity = estimate_match_capacity(data.len());
+        loop {
+            let mut matches = vec![crate::Match::from_parts(0, 0, 0); capacity];
+            match self.scan_overlapping_to_buffer(data, &mut matches) {
+                Ok(n) => {
+                    matches.truncate(n);
+                    return Ok(matches);
+                }
+                Err(crate::Error::MatchBufferOverflow { .. }) => {
+                    if capacity >= crate::cpu::MAX_CPU_MATCHES {
+                        return Err(crate::Error::MatchBufferOverflow {
+                            count: capacity,
+                            max: crate::cpu::MAX_CPU_MATCHES,
+                        });
+                    }
+                    capacity = capacity.saturating_mul(2).min(crate::cpu::MAX_CPU_MATCHES);
+                }
+                Err(other) => return Err(other),
+            }
+        }
     }
 
     /// Overlapping scan using a provided match buffer.
@@ -206,7 +243,12 @@ impl PatternSet {
                         matcher.id
                     ),
                 })?;
-                all_patterns.push(regex::escape(literal));
+                let escaped = regex::escape(literal);
+                if self.ir.case_insensitive {
+                    all_patterns.push(format!("(?i:{escaped})"));
+                } else {
+                    all_patterns.push(escaped);
+                }
                 original_ids.push(matcher.id);
             }
         }

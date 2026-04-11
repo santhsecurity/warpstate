@@ -46,7 +46,7 @@ pub enum ScanStrategy {
         /// Original pattern ID.
         pattern_id: u32,
         /// Cached compiled regex — initialized on first use.
-        compiled: std::sync::OnceLock<regex::bytes::Regex>,
+        compiled: std::sync::OnceLock<std::result::Result<regex::bytes::Regex, String>>,
     },
 
     /// Complex patterns requiring full DFA evaluation.
@@ -156,6 +156,9 @@ impl ScanStrategy {
         // Single regex fast path
         if literal_count == 0 && regex_count == 1 {
             let (pattern_id, pattern) = &ir.regex_patterns[0];
+            if crate::regex_engine::build_byte_regex(pattern).is_err() {
+                return Self::FullDfa;
+            }
             // pattern_id is bounded by the number of patterns
             #[allow(clippy::cast_possible_truncation)]
             let pattern_id_u32 = *pattern_id as u32;
@@ -242,16 +245,18 @@ fn scan_single_memchr(
                 max: out_matches.len().min(crate::cpu::MAX_CPU_MATCHES),
             });
         }
-        // SAFETY: pos < data.len() which is validated <= u32::MAX by check_input_size
         #[allow(clippy::cast_possible_truncation)]
         let start = pos as u32;
-        #[allow(clippy::cast_possible_truncation)]
-        let end = (pos as u32).saturating_add(needle_len);
+        let end = start
+            .checked_add(needle_len)
+            .ok_or(crate::Error::InputTooLarge {
+                bytes: pos.saturating_add(needle_len as usize),
+                max_bytes: crate::cpu::MAX_CPU_INPUT_BYTES,
+            })?;
         out_matches[count] = Match {
             pattern_id,
             start,
             end,
-            padding: 0,
         };
         count += 1;
     }
@@ -284,16 +289,18 @@ where
             });
         }
         count += 1;
-        // SAFETY: pos < data.len() which is validated <= u32::MAX by check_input_size
         #[allow(clippy::cast_possible_truncation)]
         let start = pos as u32;
-        #[allow(clippy::cast_possible_truncation)]
-        let end = (pos as u32).saturating_add(needle_len);
+        let end = start
+            .checked_add(needle_len)
+            .ok_or(crate::Error::InputTooLarge {
+                bytes: pos.saturating_add(needle_len as usize),
+                max_bytes: crate::cpu::MAX_CPU_INPUT_BYTES,
+            })?;
         if !visitor(Match {
             pattern_id,
             start,
             end,
-            padding: 0,
         }) {
             break;
         }
@@ -322,25 +329,29 @@ fn scan_multi_memchr(
         let needle_len = needle.len() as u32;
 
         for pos in finder.find_iter(data) {
-            // SAFETY: pos < data.len() which is validated <= u32::MAX by check_input_size
             #[allow(clippy::cast_possible_truncation)]
             let start = pos as u32;
-            #[allow(clippy::cast_possible_truncation)]
-            let end = (pos as u32).saturating_add(needle_len);
+            let end = start
+                .checked_add(needle_len)
+                .ok_or(crate::Error::InputTooLarge {
+                    bytes: pos.saturating_add(needle_len as usize),
+                    max_bytes: crate::cpu::MAX_CPU_INPUT_BYTES,
+                })?;
             matches.push(Match {
                 pattern_id: *pattern_id,
                 start,
                 end,
-                padding: 0,
             });
         }
     }
 
+    // Sort by position, then longest match first to align with
+    // Aho-Corasick LeftmostLongest match semantics.
     matches.sort_unstable_by(|a, b| {
         a.start
             .cmp(&b.start)
+            .then(b.end.cmp(&a.end))
             .then(a.pattern_id.cmp(&b.pattern_id))
-            .then(a.end.cmp(&b.end))
     });
 
     let mut last_end = 0;
@@ -368,9 +379,8 @@ where
     F: FnMut(Match) -> bool,
 {
     crate::cpu::check_input_size(data)?;
-    // Collect all matches, sort them, then dispatch
-    // For true streaming with early termination, we'd need to merge streams
-    // For simplicity and correctness, we collect and sort
+    // Collect all matches, sort them, then dispatch — with overlap deduplication
+    // matching the buffer path's semantics.
     let mut matches = Vec::with_capacity(estimate_match_capacity(data.len()));
 
     for (needle, pattern_id) in needles {
@@ -380,39 +390,48 @@ where
         let needle_len = needle.len() as u32;
 
         for pos in finder.find_iter(data) {
-            // SAFETY: pos < data.len() which is validated <= u32::MAX by check_input_size
             #[allow(clippy::cast_possible_truncation)]
             let start = pos as u32;
-            #[allow(clippy::cast_possible_truncation)]
-            let end = (pos as u32).saturating_add(needle_len);
+            let end = start
+                .checked_add(needle_len)
+                .ok_or(crate::Error::InputTooLarge {
+                    bytes: pos.saturating_add(needle_len as usize),
+                    max_bytes: crate::cpu::MAX_CPU_INPUT_BYTES,
+                })?;
             matches.push(Match {
                 pattern_id: *pattern_id,
                 start,
                 end,
-                padding: 0,
             });
         }
     }
 
-    // Sort by position, then pattern_id for deterministic output
+    // Sort by position, then longest match first to align with
+    // Aho-Corasick LeftmostLongest match semantics.
     matches.sort_unstable_by(|a, b| {
         a.start
             .cmp(&b.start)
+            .then(b.end.cmp(&a.end))
             .then(a.pattern_id.cmp(&b.pattern_id))
-            .then(a.end.cmp(&b.end))
     });
 
+    // Non-overlapping deduplication — skip matches that start before the
+    // previous match's end, matching scan_multi_memchr's semantics.
+    let mut last_end = 0u32;
     let mut count = 0usize;
     for m in matches {
-        if count >= crate::cpu::MAX_CPU_MATCHES {
-            return Err(crate::Error::MatchBufferOverflow {
-                count,
-                max: crate::cpu::MAX_CPU_MATCHES,
-            });
-        }
-        count += 1;
-        if !visitor(m) {
-            break;
+        if m.start >= last_end {
+            if count >= crate::cpu::MAX_CPU_MATCHES {
+                return Err(crate::Error::MatchBufferOverflow {
+                    count,
+                    max: crate::cpu::MAX_CPU_MATCHES,
+                });
+            }
+            last_end = m.end;
+            count += 1;
+            if !visitor(m) {
+                break;
+            }
         }
     }
 
@@ -424,20 +443,21 @@ fn scan_single_regex(
     data: &[u8],
     pattern: &str,
     pattern_id: u32,
-    compiled: &std::sync::OnceLock<regex::bytes::Regex>,
+    compiled: &std::sync::OnceLock<std::result::Result<regex::bytes::Regex, String>>,
     out_matches: &mut [Match],
 ) -> Result<usize> {
     crate::cpu::check_input_size(data)?;
 
-    // Get or compile the regex - compilation happens only once
-    let re = compiled.get_or_init(|| {
-        // Invalid regex patterns compile to a regex that matches nothing
-        regex::bytes::Regex::new(pattern).unwrap_or_else(|_| {
-            #[allow(clippy::expect_used)]
-            let r = regex::bytes::Regex::new("a^").expect("valid regex"); // Never matches
-            r
+    let re = compiled
+        .get_or_init(|| {
+            crate::regex_engine::build_byte_regex(pattern).map_err(|error| error.to_string())
         })
-    });
+        .as_ref()
+        .map_err(|reason| crate::Error::PatternCompilationFailed {
+            reason: format!(
+                "{reason}. Fix: rebuild the pattern set or use Rust byte-regex syntax."
+            ),
+        })?;
 
     let mut count = 0;
     let mut last_end = 0;
@@ -461,7 +481,6 @@ fn scan_single_regex(
                 pattern_id,
                 start,
                 end,
-                padding: 0,
             };
             last_end = out_matches[count].end;
             count += 1;
@@ -476,7 +495,7 @@ fn scan_single_regex_with<F>(
     data: &[u8],
     pattern: &str,
     pattern_id: u32,
-    compiled: &std::sync::OnceLock<regex::bytes::Regex>,
+    compiled: &std::sync::OnceLock<std::result::Result<regex::bytes::Regex, String>>,
     visitor: &mut F,
 ) -> Result<()>
 where
@@ -484,15 +503,16 @@ where
 {
     crate::cpu::check_input_size(data)?;
 
-    // Get or compile the regex - compilation happens only once
-    let re = compiled.get_or_init(|| {
-        // Invalid regex patterns compile to a regex that matches nothing
-        regex::bytes::Regex::new(pattern).unwrap_or_else(|_| {
-            #[allow(clippy::expect_used)]
-            let r = regex::bytes::Regex::new("a^").expect("valid regex"); // Never matches
-            r
+    let re = compiled
+        .get_or_init(|| {
+            crate::regex_engine::build_byte_regex(pattern).map_err(|error| error.to_string())
         })
-    });
+        .as_ref()
+        .map_err(|reason| crate::Error::PatternCompilationFailed {
+            reason: format!(
+                "{reason}. Fix: rebuild the pattern set or use Rust byte-regex syntax."
+            ),
+        })?;
 
     let mut count = 0usize;
     for m in re.find_iter(data) {
@@ -512,7 +532,6 @@ where
             pattern_id,
             start,
             end,
-            padding: 0,
         }) {
             break;
         }
@@ -523,17 +542,28 @@ where
 
 /// Estimate initial match capacity based on data size.
 ///
-/// For small inputs (<= 64KB), use `data_len` as capacity since match density
-/// can be high (e.g., single-char patterns matching every byte).
-/// For large inputs, uses `data_len / 1024` — at internet scale, files are
-/// scanned in large blocks but match density is low. Capped at 100K to
-/// prevent OOM from pathological inputs.
+/// Uses a smooth sqrt-based heuristic that avoids the 64KB cliff edge
+/// where the old implementation dropped from 65536 to 64. For small
+/// inputs, capacity scales linearly (match-dense patterns like single-char
+/// can match every byte). For large inputs, sqrt(data_len) provides a
+/// reasonable middle ground — sufficient for typical scanning but not
+/// so large as to waste memory.
+///
+/// The `PatternSet::scan()` retry loop doubles on overflow, so this
+/// estimate only needs to be "close enough" to avoid too many retries.
 #[inline]
 pub(crate) fn estimate_match_capacity(data_len: usize) -> usize {
-    if data_len <= 65_536 {
-        data_len.clamp(64, 65_536)
+    if data_len <= 4096 {
+        // Small inputs: full capacity (single-char patterns)
+        data_len.clamp(64, 4096)
+    } else if data_len <= 65_536 {
+        // Medium inputs: linear scale, capped
+        data_len
     } else {
-        (data_len / 1024).clamp(64, 100_000)
+        // Large inputs: sqrt-based estimate. sqrt(1M)=1000, sqrt(128M)=~11k.
+        // Capped at MAX_CPU_MATCHES / 4 to leave headroom.
+        let sqrt = (data_len as f64).sqrt() as usize;
+        sqrt.clamp(1024, crate::cpu::MAX_CPU_MATCHES / 4)
     }
 }
 

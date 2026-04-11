@@ -2,7 +2,7 @@
 //! Loom Testing Documentation
 //!
 //! Warpstate utilizes shared mutable state during multiple concurrent scans on the same engine.
-//! For example, `GpuMatcher`, `SmemMatcher`, and `AlgebraicDfaMatcher` employ an internal
+//! For example, `GpuMatcher` employs an internal
 //! `Mutex<Option<State>>` that is taken (via a yielding spin-lock) during a scan.
 //!
 //! # Why Loom is N/A

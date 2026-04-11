@@ -30,7 +30,7 @@ fn test_gpu_resource_pool_contention() {
             let mut data = vec![b'A'; input_size];
             data[50_000..50_008].copy_from_slice(b"GPU_TEST");
 
-            // Should route to GPU under AutoMatcher or pool implicitly under PersistentMatcher depending on backend
+            // Should route through the consolidated GPU backend when AutoMatcher selects GPU.
             // For now use AutoMatcher
             let matcher = pollster::block_on(AutoMatcher::new(&*ps_clone)).unwrap();
             let matches = pollster::block_on(matcher.scan(&data)).unwrap();

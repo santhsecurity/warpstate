@@ -20,11 +20,10 @@ fn match_split_across_chunk_boundary() {
     // Configure engine to strictly chunk exactly at 1024 bytes
     let config = AutoMatcherConfig::default()
         .gpu_max_input_size(1024)
-        .chunk_size(1024);
+        .chunk_size(1024)
+        .chunk_overlap(16);
 
-    let engine = match pollster::block_on(warpstate::persistent::PersistentMatcher::with_config(
-        &ps, config,
-    )) {
+    let engine = match pollster::block_on(warpstate::GpuMatcher::with_config(&ps, config)) {
         Ok(e) => e,
         Err(Error::NoGpuAdapter) => return,
         Err(other) => panic!("unexpected error: {other:?}"),
@@ -35,7 +34,7 @@ fn match_split_across_chunk_boundary() {
     // Put "legendary" right over the boundary: bytes 1020 through 1028
     data[1020..1029].copy_from_slice(b"legendary");
 
-    let stream = warpstate::pipeline::StreamPipeline::new(engine, 16384);
+    let stream = warpstate::StreamPipeline::new(engine, 16);
     let matches = pollster::block_on(stream.scan(&data)).unwrap();
 
     for (i, m) in matches.iter().enumerate() {
@@ -64,10 +63,10 @@ fn input_larger_than_vram() {
     let ps = PatternSet::builder().regex("target").build().unwrap();
 
     // Tiny VRAM config
-    let config = AutoMatcherConfig::default().gpu_max_input_size(4096);
-    let engine = match pollster::block_on(warpstate::persistent::PersistentMatcher::with_config(
-        &ps, config,
-    )) {
+    let config = AutoMatcherConfig::default()
+        .gpu_max_input_size(4096)
+        .chunk_overlap(16);
+    let engine = match pollster::block_on(warpstate::GpuMatcher::with_config(&ps, config)) {
         Ok(e) => e,
         Err(Error::NoGpuAdapter) => return,
         Err(other) => panic!("unexpected error: {other:?}"),
@@ -77,7 +76,7 @@ fn input_larger_than_vram() {
     let mut data = vec![b'0'; 100_000];
     data[99_000..99_006].copy_from_slice(b"target");
 
-    let stream = warpstate::pipeline::StreamPipeline::new(engine, 16384);
+    let stream = warpstate::StreamPipeline::new(engine, 16);
     let matches = pollster::block_on(stream.scan(&data)).unwrap();
 
     assert_eq!(

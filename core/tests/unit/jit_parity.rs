@@ -1,8 +1,8 @@
 #![cfg(feature = "jit")]
 #![allow(clippy::unwrap_used)]
 
-use warpstate::dfa::RegexDFA;
 use warpstate::Match;
+use warpstate::RegexDFA;
 
 #[test]
 fn jit_regex_scan_matches_non_jit_scan() {
